@@ -265,16 +265,108 @@
   .thumb-wrap img.loaded + .thumb-placeholder,
   .thumb-wrap.has-image .thumb-placeholder { opacity: 0; pointer-events: none; }
 
-  /* Detail hero image */
-  .detail-hero {
-    width: 80px;
-    height: 80px;
-    border-radius: 20px;
-    object-fit: cover;
-    margin-bottom: 16px;
-    display: none;
+  /* CAROUSEL */
+  .carousel-wrap {
+    margin: 0 -24px 20px;
+    position: relative;
+    background: #111;
+    overflow: hidden;
   }
-  .detail-hero.loaded { display: block; }
+  .carousel-track {
+    display: flex;
+    transition: transform 0.38s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
+  }
+  .carousel-slide {
+    flex-shrink: 0;
+    width: 100%;
+    height: 240px;
+    position: relative;
+    overflow: hidden;
+  }
+  .carousel-slide img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .carousel-slide img.loaded { opacity: 1; }
+  .carousel-skeleton {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, #1e1e1e 25%, #2a2a2a 50%, #1e1e1e 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+  .carousel-skeleton.hidden { display: none; }
+
+  /* Dots */
+  .carousel-dots {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+  }
+  .carousel-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.4);
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+  .carousel-dot.active {
+    background: #fff;
+    width: 18px;
+    border-radius: 3px;
+  }
+
+  /* Prev/Next arrows */
+  .carousel-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(6px);
+    border: none;
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .carousel-wrap:hover .carousel-arrow { opacity: 1; }
+  .carousel-arrow.prev { left: 12px; }
+  .carousel-arrow.next { right: 12px; }
+  .carousel-arrow:active { transform: translateY(-50%) scale(0.93); }
+  .carousel-arrow.hidden { display: none; }
+
+  /* Fallback emoji block when no images */
+  .carousel-fallback {
+    height: 160px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg);
+    margin: 0 -24px 20px;
+  }
+  .carousel-fallback-emoji { font-size: 48px; }
+  .carousel-fallback-label { font-size: 12px; color: var(--muted); }
+
   .detail-icon-wrap { transition: opacity 0.2s; }
   .detail-icon-wrap.hidden { display: none; }
 
@@ -724,7 +816,8 @@ function getDirectionsUrl(star) {
 }
 
 // ─── WIKIPEDIA IMAGE CACHE ───────────────────────────────────────────────────
-const imgCache = {}; // name -> url | null | 'loading'
+const imgCache = {};       // name -> first thumb url | null | 'loading'
+const imgMultiCache = {};  // name -> array of urls
 
 async function fetchWikiImage(name) {
   if (imgCache[name] !== undefined) return imgCache[name];
@@ -741,6 +834,55 @@ async function fetchWikiImage(name) {
   } catch {
     imgCache[name] = null;
     return null;
+  }
+}
+
+// Fetch multiple images for the carousel via Wikipedia's images API
+async function fetchWikiImages(name) {
+  if (imgMultiCache[name]) return imgMultiCache[name];
+  try {
+    // Step 1: get page images list (up to 10 filenames)
+    const listUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(name)}&prop=images&format=json&imlimit=10&origin=*`;
+    const listRes = await fetch(listUrl);
+    const listData = await listRes.json();
+    const pages = listData.query?.pages || {};
+    const page = pages[Object.keys(pages)[0]];
+    const imageFiles = (page?.images || [])
+      .map(i => i.title)
+      .filter(t => /\.(jpg|jpeg|png)$/i.test(t) && !/flag|logo|map|icon|seal|coat|ribbon|signature|stamp|award/i.test(t))
+      .slice(0, 8);
+
+    if (!imageFiles.length) {
+      // Fall back to single thumbnail
+      const thumb = await fetchWikiImage(name);
+      const result = thumb ? [thumb] : [];
+      imgMultiCache[name] = result;
+      return result;
+    }
+
+    // Step 2: get actual thumbnail URLs for those files
+    const titlesParam = imageFiles.join('|');
+    const thumbUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titlesParam)}&prop=imageinfo&iiprop=url|size&iiurlwidth=400&format=json&origin=*`;
+    const thumbRes = await fetch(thumbUrl);
+    const thumbData = await thumbRes.json();
+    const thumbPages = thumbData.query?.pages || {};
+
+    const urls = Object.values(thumbPages)
+      .map(p => p?.imageinfo?.[0]?.thumburl)
+      .filter(u => u && !u.includes('svg'))
+      .slice(0, 5);
+
+    // Always prepend the main thumbnail if we have one
+    const mainThumb = imgCache[name] && imgCache[name] !== 'loading' ? imgCache[name] : null;
+    const allUrls = mainThumb ? [mainThumb, ...urls.filter(u => u !== mainThumb)] : urls;
+    const result = [...new Set(allUrls)].slice(0, 5);
+
+    imgMultiCache[name] = result.length ? result : [];
+    return imgMultiCache[name];
+  } catch {
+    const thumb = imgCache[name] && imgCache[name] !== 'loading' ? [imgCache[name]] : [];
+    imgMultiCache[name] = thumb;
+    return thumb;
   }
 }
 
@@ -850,12 +992,22 @@ function openDetail(name) {
   const dirUrl = getDirectionsUrl(star);
 
   document.getElementById('detail-body').innerHTML = `
-    <img id="detail-hero-img" class="detail-hero" alt="${star.name}">
-    <div class="detail-icon-wrap ${cc.iconClass}" id="detail-icon-fallback" style="font-size:30px">${star.emoji}</div>
-    <div class="detail-name">${star.name}</div>
-    <div class="detail-badges">
-      <span class="detail-badge ${cc.class}">${cc.label}</span>
-      <span class="detail-badge" style="background:var(--accent-light);color:var(--accent)">★ Since ${star.year}</span>
+    <div class="carousel-wrap" id="carousel-wrap">
+      <div class="carousel-track" id="carousel-track"></div>
+      <div class="carousel-dots" id="carousel-dots"></div>
+      <button class="carousel-arrow prev hidden" id="carousel-prev" aria-label="Previous">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <button class="carousel-arrow next hidden" id="carousel-next" aria-label="Next">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+      </button>
+    </div>
+    <div style="padding:0 0 4px">
+      <div class="detail-name">${star.name}</div>
+      <div class="detail-badges">
+        <span class="detail-badge ${cc.class}">${cc.label}</span>
+        <span class="detail-badge" style="background:var(--accent-light);color:var(--accent)">★ Since ${star.year}</span>
+      </div>
     </div>
 
     <a href="${mapUrl}" target="_blank" rel="noopener" class="map-section">
@@ -897,32 +1049,98 @@ function openDetail(name) {
   document.getElementById('detail-overlay').classList.add('open');
   document.body.style.overflow = 'hidden';
 
-  // Load hero image (larger size)
-  const heroImg = document.getElementById('detail-hero-img');
-  const iconFallback = document.getElementById('detail-icon-fallback');
-  async function loadHero() {
-    // Try cache first; if not loaded, fetch at larger size
-    let url = imgCache[star.name];
-    if (!url || url === 'loading') {
-      try {
-        const apiUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(star.name)}&prop=pageimages&format=json&pithumbsize=300&origin=*`;
-        const res = await fetch(apiUrl);
-        const data = await res.json();
-        const pages = data.query.pages;
-        const page = pages[Object.keys(pages)[0]];
-        url = page?.thumbnail?.source || null;
-        imgCache[star.name] = url;
-      } catch { url = null; }
+  // ── BUILD CAROUSEL ──────────────────────────────────────────────────────────
+  let currentSlide = 0;
+  let carouselImages = [];
+
+  function buildCarousel(urls) {
+    const wrap = document.getElementById('carousel-wrap');
+    const track = document.getElementById('carousel-track');
+    const dotsEl = document.getElementById('carousel-dots');
+    const prevBtn = document.getElementById('carousel-prev');
+    const nextBtn = document.getElementById('carousel-next');
+    if (!track) return;
+
+    if (!urls || urls.length === 0) {
+      // Show emoji fallback
+      wrap.outerHTML = `<div class="carousel-fallback">
+        <div class="carousel-fallback-emoji">${star.emoji}</div>
+        <div class="carousel-fallback-label">No photos available</div>
+      </div>`;
+      return;
     }
-    if (url && heroImg) {
-      heroImg.src = url;
-      heroImg.onload = () => {
-        heroImg.classList.add('loaded');
-        if (iconFallback) iconFallback.classList.add('hidden');
+
+    carouselImages = urls;
+
+    // Build slides
+    track.innerHTML = urls.map((url, i) => `
+      <div class="carousel-slide">
+        <div class="carousel-skeleton" id="skel-${i}"></div>
+        <img src="${url}" alt="${star.name}" data-idx="${i}">
+      </div>
+    `).join('');
+
+    // Load images
+    track.querySelectorAll('img').forEach(img => {
+      const idx = parseInt(img.dataset.idx);
+      img.onload = () => {
+        img.classList.add('loaded');
+        const skel = document.getElementById('skel-' + idx);
+        if (skel) skel.classList.add('hidden');
       };
+      img.onerror = () => {
+        img.closest('.carousel-slide').style.display = 'none';
+      };
+    });
+
+    // Build dots
+    if (urls.length > 1) {
+      dotsEl.innerHTML = urls.map((_, i) =>
+        `<div class="carousel-dot${i === 0 ? ' active' : ''}" data-idx="${i}"></div>`
+      ).join('');
+
+      dotsEl.addEventListener('click', e => {
+        const dot = e.target.closest('[data-idx]');
+        if (dot) goTo(parseInt(dot.dataset.idx));
+      });
+
+      prevBtn.classList.remove('hidden');
+      nextBtn.classList.remove('hidden');
+      prevBtn.addEventListener('click', () => goTo(currentSlide - 1));
+      nextBtn.addEventListener('click', () => goTo(currentSlide + 1));
     }
+
+    // Touch swipe
+    let tx = 0;
+    track.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, { passive: true });
+    track.addEventListener('touchend', e => {
+      const dx = e.changedTouches[0].clientX - tx;
+      if (Math.abs(dx) > 40) goTo(currentSlide + (dx < 0 ? 1 : -1));
+    }, { passive: true });
   }
-  loadHero();
+
+  function goTo(idx) {
+    const urls = carouselImages;
+    if (!urls.length) return;
+    currentSlide = Math.max(0, Math.min(idx, urls.length - 1));
+    const track = document.getElementById('carousel-track');
+    if (track) track.style.transform = `translateX(-${currentSlide * 100}%)`;
+    document.querySelectorAll('.carousel-dot').forEach((d, i) =>
+      d.classList.toggle('active', i === currentSlide)
+    );
+  }
+
+  // Show loading skeleton immediately, then populate
+  const track = document.getElementById('carousel-track');
+  if (track) {
+    track.innerHTML = `<div class="carousel-slide"><div class="carousel-skeleton"></div></div>`;
+  }
+
+  fetchWikiImages(star.name).then(urls => {
+    buildCarousel(urls);
+    // Also cache first image for list thumbnails
+    if (urls.length && !imgCache[star.name]) imgCache[star.name] = urls[0];
+  });
 }
 
 function closeDetail() {
