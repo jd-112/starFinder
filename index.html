@@ -1,0 +1,1474 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Star Walk — Hollywood Walk of Fame</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #F5F3EE;
+    --surface: #FFFFFF;
+    --border: #E8E4DC;
+    --text: #1A1814;
+    --muted: #8A847A;
+    --accent: #C8973A;
+    --accent-light: #F5E9D0;
+    --film: #2C5F8A;
+    --tv: #7A3B8A;
+    --music: #8A3B3B;
+    --radio: #3B7A5A;
+    --theatre: #5A6A3B;
+    --live: #8A5A3B;
+    --radius: 16px;
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'DM Sans', sans-serif;
+    overflow-x: hidden;
+  }
+
+  /* APP SHELL */
+  .app {
+    max-width: 430px;
+    margin: 0 auto;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+
+  /* HEADER */
+  .header {
+    padding: 56px 24px 20px;
+    background: var(--bg);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .header.scrolled {
+    border-color: var(--border);
+    box-shadow: 0 2px 20px rgba(0,0,0,0.04);
+  }
+  .header-top {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .logo {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .logo-eyebrow {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--accent);
+  }
+  .logo-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    line-height: 1;
+    color: var(--text);
+  }
+  .star-count-badge {
+    background: var(--accent-light);
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 5px 10px;
+    border-radius: 100px;
+    letter-spacing: 0.03em;
+  }
+
+  /* SEARCH */
+  .search-wrap {
+    position: relative;
+  }
+  .search-icon {
+    position: absolute;
+    left: 14px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--muted);
+    pointer-events: none;
+  }
+  .search-input {
+    width: 100%;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: 12px;
+    padding: 13px 14px 13px 42px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s, box-shadow 0.2s;
+    -webkit-appearance: none;
+  }
+  .search-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(200,151,58,0.12);
+  }
+  .search-input::placeholder { color: var(--muted); }
+  .search-clear {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: var(--border);
+    border: none;
+    border-radius: 50%;
+    width: 20px;
+    height: 20px;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--muted);
+    font-size: 12px;
+    padding: 0;
+  }
+  .search-clear.visible { display: flex; }
+
+  /* TABS - CATEGORIES */
+  .tabs-wrap {
+    padding: 16px 0 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .tabs-wrap::-webkit-scrollbar { display: none; }
+  .tabs {
+    display: flex;
+    gap: 8px;
+    padding: 0 24px;
+    width: max-content;
+  }
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 14px;
+    border-radius: 100px;
+    border: 1.5px solid var(--border);
+    background: var(--surface);
+    font-family: 'DM Sans', sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.18s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .tab:active { transform: scale(0.96); }
+  .tab.active {
+    background: var(--text);
+    border-color: var(--text);
+    color: #fff;
+  }
+  .tab-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* MAIN CONTENT */
+  .content {
+    flex: 1;
+    padding: 20px 24px;
+    padding-bottom: calc(20px + var(--safe-bottom));
+    overflow-y: auto;
+  }
+
+  /* SECTION LABEL */
+  .section-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+  }
+
+  /* RESULTS COUNT */
+  .results-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .results-count {
+    font-size: 13px;
+    color: var(--muted);
+  }
+  .results-count span { color: var(--text); font-weight: 600; }
+
+  /* THUMBNAILS */
+  .thumb {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    object-fit: cover;
+    flex-shrink: 0;
+    display: block;
+  }
+  .thumb-placeholder {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 20px;
+    transition: opacity 0.2s;
+  }
+  .thumb-wrap {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+  }
+  .thumb-wrap img {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 12px;
+    object-fit: cover;
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .thumb-wrap img.loaded { opacity: 1; }
+  .thumb-wrap .thumb-placeholder {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    transition: opacity 0.3s;
+  }
+  .thumb-wrap img.loaded + .thumb-placeholder,
+  .thumb-wrap.has-image .thumb-placeholder { opacity: 0; pointer-events: none; }
+
+  /* CAROUSEL */
+  .carousel-wrap {
+    margin: 0 -24px 20px;
+    position: relative;
+    background: #111;
+    overflow: hidden;
+  }
+  .carousel-track {
+    display: flex;
+    transition: transform 0.38s cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: transform;
+  }
+  .carousel-slide {
+    flex-shrink: 0;
+    width: 100%;
+    height: 240px;
+    position: relative;
+    overflow: hidden;
+  }
+  .carousel-slide img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: top center;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  .carousel-slide img.loaded { opacity: 1; }
+  .carousel-skeleton {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, #1e1e1e 25%, #2a2a2a 50%, #1e1e1e 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+  }
+  .carousel-skeleton.hidden { display: none; }
+
+  /* Dots */
+  .carousel-dots {
+    position: absolute;
+    bottom: 12px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 6px;
+    z-index: 2;
+  }
+  .carousel-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.4);
+    transition: all 0.2s;
+    cursor: pointer;
+  }
+  .carousel-dot.active {
+    background: #fff;
+    width: 18px;
+    border-radius: 3px;
+  }
+
+  /* Prev/Next arrows */
+  .carousel-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 2;
+    background: rgba(255,255,255,0.15);
+    backdrop-filter: blur(6px);
+    border: none;
+    border-radius: 50%;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .carousel-wrap:hover .carousel-arrow { opacity: 1; }
+  .carousel-arrow.prev { left: 12px; }
+  .carousel-arrow.next { right: 12px; }
+  .carousel-arrow:active { transform: translateY(-50%) scale(0.93); }
+  .carousel-arrow.hidden { display: none; }
+
+  /* Fallback emoji block when no images */
+  .carousel-fallback {
+    height: 160px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 10px;
+    background: var(--bg);
+    margin: 0 -24px 20px;
+  }
+  .carousel-fallback-emoji { font-size: 48px; }
+  .carousel-fallback-label { font-size: 12px; color: var(--muted); }
+
+  .detail-icon-wrap { transition: opacity 0.2s; }
+  .detail-icon-wrap.hidden { display: none; }
+
+  /* DATA LOADING BANNER */
+  .data-loading-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--accent-light);
+    border-radius: 12px;
+    margin-bottom: 16px;
+    font-size: 13px;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .data-loading-bar.hidden { display: none; }
+  .data-spinner {
+    width: 14px;
+    height: 14px;
+    border: 2px solid var(--accent);
+    border-top-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    flex-shrink: 0;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* BIO SECTION */
+  .bio-section {
+    margin-bottom: 16px;
+  }
+  .bio-section-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .bio-blurb {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+  .bio-known-for {
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .bio-fact {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    font-size: 13.5px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .bio-fact-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+    margin-top: 7px;
+  }
+  .bio-loading {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bio-skel-line {
+    height: 13px;
+    border-radius: 6px;
+  }
+  .bio-skel-line:nth-child(1) { width: 100%; }
+  .bio-skel-line:nth-child(2) { width: 92%; }
+  .bio-skel-line:nth-child(3) { width: 85%; }
+  .bio-skel-line:nth-child(4) { width: 70%; margin-bottom: 6px; }
+  .bio-skel-line:nth-child(5) { width: 60%; }
+  .bio-skel-line:nth-child(6) { width: 65%; }
+  .bio-skel-line:nth-child(7) { width: 55%; }
+  .bio-error {
+    font-size: 13px;
+    color: var(--muted);
+    font-style: italic;
+  }
+
+  /* STAR CARD */
+  .star-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .star-card {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    cursor: pointer;
+    transition: border-color 0.18s, box-shadow 0.18s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent;
+    text-decoration: none;
+    color: inherit;
+  }
+  .star-card:active { transform: scale(0.98); }
+  .star-card:hover { border-color: var(--accent); box-shadow: 0 4px 20px rgba(200,151,58,0.1); }
+
+  .star-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    font-size: 20px;
+  }
+  .star-info { flex: 1; min-width: 0; }
+  .star-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 17px;
+    line-height: 1.2;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 4px;
+  }
+  .star-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .star-category-badge {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border-radius: 6px;
+    opacity: 0.85;
+  }
+  .star-address {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .star-chevron { color: var(--border); flex-shrink: 0; }
+
+  /* CATEGORY COLORS */
+  .cat-film { background: #EBF2F8; color: var(--film); }
+  .cat-film-icon { background: #EBF2F8; }
+  .cat-tv { background: #F3EBF8; color: var(--tv); }
+  .cat-tv-icon { background: #F3EBF8; }
+  .cat-music { background: #F8EBEB; color: var(--music); }
+  .cat-music-icon { background: #F8EBEB; }
+  .cat-radio { background: #EBF5F1; color: var(--radio); }
+  .cat-radio-icon { background: #EBF5F1; }
+  .cat-theatre { background: #F1F3EB; color: var(--theatre); }
+  .cat-theatre-icon { background: #F1F3EB; }
+  .cat-live { background: #F5EFEB; color: var(--live); }
+  .cat-live-icon { background: #F5EFEB; }
+
+  /* EMPTY STATE */
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    display: none;
+  }
+  .empty-state.visible { display: block; }
+  .empty-star {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.3;
+  }
+  .empty-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 22px;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+  .empty-sub { font-size: 14px; color: var(--muted); line-height: 1.6; }
+
+  /* DETAIL PANEL */
+  .detail-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(26,24,20,0.4);
+    z-index: 200;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s;
+    backdrop-filter: blur(2px);
+  }
+  .detail-overlay.open { opacity: 1; pointer-events: all; }
+
+  .detail-panel {
+    position: fixed;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%) translateY(100%);
+    width: 100%;
+    max-width: 430px;
+    background: var(--surface);
+    border-radius: 24px 24px 0 0;
+    z-index: 201;
+    transition: transform 0.32s cubic-bezier(0.34, 1.56, 0.64, 1);
+    padding-bottom: var(--safe-bottom);
+    max-height: 92vh;
+    overflow-y: auto;
+  }
+  .detail-panel.open { transform: translateX(-50%) translateY(0); }
+
+  .detail-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--border);
+    border-radius: 4px;
+    margin: 12px auto 0;
+  }
+
+  .detail-body { padding: 20px 24px 32px; }
+
+  .detail-icon-wrap {
+    width: 64px;
+    height: 64px;
+    border-radius: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 30px;
+    margin-bottom: 16px;
+  }
+  .detail-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 28px;
+    line-height: 1.1;
+    margin-bottom: 8px;
+  }
+  .detail-badges { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .detail-badge {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 5px 10px;
+    border-radius: 8px;
+  }
+
+  .detail-info-rows { display: flex; flex-direction: column; gap: 10px; margin-bottom: 24px; }
+  .detail-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px;
+    background: var(--bg);
+    border-radius: 12px;
+  }
+  .detail-row-icon { font-size: 16px; margin-top: 1px; }
+  .detail-row-content {}
+  .detail-row-label { font-size: 10px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+  .detail-row-value { font-size: 14px; font-weight: 500; color: var(--text); line-height: 1.4; }
+
+  .detail-actions { display: flex; flex-direction: column; gap: 10px; }
+  .btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 15px;
+    border-radius: 14px;
+    font-family: 'DM Sans', sans-serif;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    border: none;
+    text-decoration: none;
+    transition: opacity 0.15s, transform 0.15s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .btn:active { transform: scale(0.97); opacity: 0.9; }
+  .btn-primary { background: var(--text); color: #fff; }
+  .btn-secondary { background: var(--bg); color: var(--text); border: 1.5px solid var(--border); }
+  .btn-accent { background: var(--accent); color: #fff; }
+
+  /* MAP SECTION */
+  .map-section {
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1.5px solid var(--border);
+    margin-bottom: 16px;
+    background: #f0ede7;
+    height: 160px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    transition: opacity 0.15s;
+  }
+  .map-section:active { opacity: 0.8; }
+  .map-placeholder {
+    font-size: 28px;
+  }
+  .map-street {
+    font-family: 'DM Serif Display', serif;
+    font-size: 15px;
+    color: var(--text);
+  }
+  .map-sub { font-size: 12px; color: var(--muted); }
+
+  /* FEATURED / TOP ROW */
+  .featured-row {
+    display: flex;
+    gap: 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    margin: 0 -24px;
+    padding: 0 24px 4px;
+    margin-bottom: 20px;
+  }
+  .featured-row::-webkit-scrollbar { display: none; }
+  .featured-card {
+    flex-shrink: 0;
+    width: 130px;
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: var(--radius);
+    padding: 14px;
+    cursor: pointer;
+    transition: border-color 0.18s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .featured-card:active { transform: scale(0.97); }
+  .featured-card:hover { border-color: var(--accent); }
+  .featured-emoji { font-size: 24px; margin-bottom: 8px; }
+  .featured-name {
+    font-family: 'DM Serif Display', serif;
+    font-size: 14px;
+    line-height: 1.25;
+    margin-bottom: 4px;
+  }
+  .featured-cat { font-size: 10px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+
+  /* LOADING */
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+  .skeleton {
+    background: linear-gradient(90deg, var(--border) 25%, var(--bg) 50%, var(--border) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 8px;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- HEADER -->
+  <div class="header" id="header">
+    <div class="header-top">
+      <div class="logo">
+        <span class="logo-eyebrow">Hollywood</span>
+        <span class="logo-title">Star Walk</span>
+      </div>
+      <div class="star-count-badge" id="star-count-badge">2,700+ Stars</div>
+    </div>
+    <div class="search-wrap">
+      <svg class="search-icon" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2">
+        <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
+      </svg>
+      <input class="search-input" id="search-input" type="search" placeholder="Search any celebrity…" autocomplete="off" autocorrect="off" spellcheck="false">
+      <button class="search-clear" id="search-clear" aria-label="Clear search">✕</button>
+    </div>
+    <div class="tabs-wrap">
+      <div class="tabs" id="tabs">
+        <button class="tab active" data-cat="all">
+          <span class="tab-dot" style="background:#C8973A"></span> All
+        </button>
+        <button class="tab" data-cat="film">
+          <span class="tab-dot" style="background:var(--film)"></span> Film
+        </button>
+        <button class="tab" data-cat="tv">
+          <span class="tab-dot" style="background:var(--tv)"></span> Television
+        </button>
+        <button class="tab" data-cat="music">
+          <span class="tab-dot" style="background:var(--music)"></span> Music
+        </button>
+        <button class="tab" data-cat="radio">
+          <span class="tab-dot" style="background:var(--radio)"></span> Radio
+        </button>
+        <button class="tab" data-cat="theatre">
+          <span class="tab-dot" style="background:var(--theatre)"></span> Theatre
+        </button>
+        <button class="tab" data-cat="live">
+          <span class="tab-dot" style="background:var(--live)"></span> Live Perf.
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- MAIN CONTENT -->
+  <div class="content" id="content">
+
+    <!-- Featured (shown when no search) -->
+    <div id="featured-section">
+      <p class="section-label">Featured Stars</p>
+      <div class="featured-row" id="featured-row"></div>
+    </div>
+
+    <!-- Data loading banner -->
+    <div class="data-loading-bar" id="data-loading-bar">
+      <div class="data-spinner"></div>
+      <span id="data-loading-text">Loading full Walk of Fame dataset…</span>
+    </div>
+
+    <!-- Results -->
+    <div class="results-info">
+      <p class="section-label" style="margin:0" id="results-label">All Stars</p>
+      <span class="results-count" id="results-count"><span>0</span> stars</span>
+    </div>
+    <div class="star-list" id="star-list"></div>
+
+    <div class="empty-state" id="empty-state">
+      <div class="empty-star">★</div>
+      <p class="empty-title">No stars found</p>
+      <p class="empty-sub">Try a different name or<br>browse by category.</p>
+    </div>
+
+  </div>
+</div>
+
+<!-- DETAIL OVERLAY -->
+<div class="detail-overlay" id="detail-overlay"></div>
+<div class="detail-panel" id="detail-panel">
+  <div class="detail-handle"></div>
+  <div class="detail-body" id="detail-body"></div>
+</div>
+
+<script>
+// ─── DATA ───────────────────────────────────────────────────────────────────
+// Curated list of well-known Hollywood Walk of Fame stars with real addresses
+const STARS = [
+  // FILM
+  { name: "Marilyn Monroe", cat: "film", emoji: "🎬", year: 1960, address: "6774 Hollywood Blvd", lat: 34.1016, lng: -118.3364, note: "Near Highland Ave intersection" },
+  { name: "Humphrey Bogart", cat: "film", emoji: "🎬", year: 1960, address: "6322 Hollywood Blvd", lat: 34.1017, lng: -118.3278, note: "Classic golden-era star" },
+  { name: "Audrey Hepburn", cat: "film", emoji: "🎬", year: 1960, address: "6828 Hollywood Blvd", lat: 34.1016, lng: -118.3374, note: "Near Chinese Theatre" },
+  { name: "Cary Grant", cat: "film", emoji: "🎬", year: 1960, address: "6301 Hollywood Blvd", lat: 34.1017, lng: -118.3272, note: "Classic Hollywood actor" },
+  { name: "James Dean", cat: "film", emoji: "🎬", year: 1960, address: "1719 Vine St", lat: 34.0982, lng: -118.3268, note: "Rebel Without a Cause star" },
+  { name: "Grace Kelly", cat: "film", emoji: "🎬", year: 1960, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3369, note: "Princess of Monaco" },
+  { name: "Clark Gable", cat: "film", emoji: "🎬", year: 1960, address: "1708 Vine St", lat: 34.0982, lng: -118.3267, note: "Gone with the Wind star" },
+  { name: "Meryl Streep", cat: "film", emoji: "🎬", year: 2004, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3370, note: "Three-time Academy Award winner" },
+  { name: "Tom Hanks", cat: "film", emoji: "🎬", year: 1992, address: "7000 Hollywood Blvd", lat: 34.1017, lng: -118.3398, note: "Two-time Oscar winner" },
+  { name: "Denzel Washington", cat: "film", emoji: "🎬", year: 1998, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3368, note: "Multiple Academy Award winner" },
+  { name: "Julia Roberts", cat: "film", emoji: "🎬", year: 1994, address: "6925 Hollywood Blvd", lat: 34.1016, lng: -118.3387, note: "Pretty Woman star" },
+  { name: "Harrison Ford", cat: "film", emoji: "🎬", year: 2003, address: "6801 Hollywood Blvd", lat: 34.1017, lng: -118.3369, note: "Indiana Jones & Han Solo" },
+  { name: "Clint Eastwood", cat: "film", emoji: "🎬", year: 1984, address: "6767 Hollywood Blvd", lat: 34.1016, lng: -118.3363, note: "Dirty Harry actor-director" },
+  { name: "Steven Spielberg", cat: "film", emoji: "🎬", year: 1986, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3371, note: "Legendary director" },
+  { name: "Robert De Niro", cat: "film", emoji: "🎬", year: 2013, address: "6840 Hollywood Blvd", lat: 34.1016, lng: -118.3376, note: "Raging Bull actor" },
+  { name: "Al Pacino", cat: "film", emoji: "🎬", year: 2007, address: "6834 Hollywood Blvd", lat: 34.1016, lng: -118.3375, note: "Scarface, Godfather" },
+  { name: "Angelina Jolie", cat: "film", emoji: "🎬", year: 2011, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3367, note: "Lara Croft actress" },
+  { name: "Brad Pitt", cat: "film", emoji: "🎬", year: 2012, address: "6801 Hollywood Blvd", lat: 34.1017, lng: -118.3366, note: "Fight Club, Once Upon a Time" },
+  { name: "Leonardo DiCaprio", cat: "film", emoji: "🎬", year: 2022, address: "6931 Hollywood Blvd", lat: 34.1016, lng: -118.3389, note: "The Revenant, Titanic" },
+  { name: "Charlize Theron", cat: "film", emoji: "🎬", year: 2005, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3372, note: "Monster, Mad Max" },
+
+  // TV
+  { name: "Oprah Winfrey", cat: "tv", emoji: "📺", year: 1994, address: "6269 Hollywood Blvd", lat: 34.1017, lng: -118.3269, note: "Beloved television host" },
+  { name: "Ellen DeGeneres", cat: "tv", emoji: "📺", year: 2012, address: "6834 Hollywood Blvd", lat: 34.1016, lng: -118.3374, note: "Talk show host, comedian" },
+  { name: "Johnny Carson", cat: "tv", emoji: "📺", year: 1987, address: "6279 Hollywood Blvd", lat: 34.1017, lng: -118.3271, note: "The Tonight Show legend" },
+  { name: "Dick Van Dyke", cat: "tv", emoji: "📺", year: 1993, address: "6656 Hollywood Blvd", lat: 34.1016, lng: -118.3344, note: "Mary Poppins, Van Dyke Show" },
+  { name: "Lucille Ball", cat: "tv", emoji: "📺", year: 1960, address: "6436 Hollywood Blvd", lat: 34.1016, lng: -118.3302, note: "I Love Lucy legend" },
+  { name: "Jerry Seinfeld", cat: "tv", emoji: "📺", year: 2002, address: "6100 Hollywood Blvd", lat: 34.1018, lng: -118.3236, note: "Seinfeld creator and star" },
+  { name: "David Letterman", cat: "tv", emoji: "📺", year: 2002, address: "7001 Hollywood Blvd", lat: 34.1018, lng: -118.3399, note: "Late Night legend" },
+  { name: "Jay Leno", cat: "tv", emoji: "📺", year: 1988, address: "6777 Hollywood Blvd", lat: 34.1016, lng: -118.3364, note: "The Tonight Show host" },
+  { name: "Bob Hope", cat: "tv", emoji: "📺", year: 1960, address: "1625 Vine St", lat: 34.0977, lng: -118.3266, note: "Comedy legend" },
+
+  // MUSIC
+  { name: "Michael Jackson", cat: "music", emoji: "🎵", year: 1984, address: "6927 Hollywood Blvd", lat: 34.1016, lng: -118.3388, note: "King of Pop" },
+  { name: "Elvis Presley", cat: "music", emoji: "🎵", year: 1960, address: "6777 Hollywood Blvd", lat: 34.1016, lng: -118.3365, note: "The King of Rock and Roll" },
+  { name: "The Beatles", cat: "music", emoji: "🎵", year: 2012, address: "1750 N Vine St", lat: 34.0985, lng: -118.3270, note: "Legendary rock band" },
+  { name: "Barbra Streisand", cat: "music", emoji: "🎵", year: 1976, address: "6925 Hollywood Blvd", lat: 34.1016, lng: -118.3386, note: "Multi-Grammy winner" },
+  { name: "Frank Sinatra", cat: "music", emoji: "🎵", year: 1960, address: "1600 N Vine St", lat: 34.0976, lng: -118.3265, note: "Ol' Blue Eyes" },
+  { name: "Whitney Houston", cat: "music", emoji: "🎵", year: 1998, address: "6901 Hollywood Blvd", lat: 34.1016, lng: -118.3384, note: "I Will Always Love You singer" },
+  { name: "Madonna", cat: "music", emoji: "🎵", year: 2008, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3373, note: "Queen of Pop" },
+  { name: "Dolly Parton", cat: "music", emoji: "🎵", year: 1984, address: "6712 Hollywood Blvd", lat: 34.1016, lng: -118.3356, note: "Country music icon" },
+  { name: "Prince", cat: "music", emoji: "🎵", year: 1985, address: "6753 Hollywood Blvd", lat: 34.1016, lng: -118.3361, note: "Purple Rain legend" },
+  { name: "David Bowie", cat: "music", emoji: "🎵", year: 1997, address: "6400 Hollywood Blvd", lat: 34.1016, lng: -118.3295, note: "Ziggy Stardust creator" },
+  { name: "Aretha Franklin", cat: "music", emoji: "🎵", year: 1979, address: "1749 Vine St", lat: 34.0985, lng: -118.3269, note: "Queen of Soul" },
+  { name: "Stevie Wonder", cat: "music", emoji: "🎵", year: 1994, address: "6627 Hollywood Blvd", lat: 34.1016, lng: -118.3338, note: "Musical genius" },
+  { name: "Johnny Cash", cat: "music", emoji: "🎵", year: 1976, address: "1717 N Vine St", lat: 34.0982, lng: -118.3268, note: "The Man in Black" },
+  { name: "Tina Turner", cat: "music", emoji: "🎵", year: 1986, address: "6901 Hollywood Blvd", lat: 34.1016, lng: -118.3385, note: "Simply the Best" },
+  { name: "Beyoncé", cat: "music", emoji: "🎵", year: 2006, address: "6840 Hollywood Blvd", lat: 34.1016, lng: -118.3377, note: "Queen Bey" },
+  { name: "Taylor Swift", cat: "music", emoji: "🎵", year: 2022, address: "7080 Hollywood Blvd", lat: 34.1018, lng: -118.3410, note: "Record-breaking pop star" },
+
+  // RADIO
+  { name: "Rush Limbaugh", cat: "radio", emoji: "📻", year: 1993, address: "6269 Hollywood Blvd", lat: 34.1017, lng: -118.3270, note: "Conservative radio host" },
+  { name: "Larry King", cat: "radio", emoji: "📻", year: 1997, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3366, note: "CNN interview legend" },
+
+  // THEATRE
+  { name: "Carol Burnett", cat: "theatre", emoji: "🎭", year: 1974, address: "6468 Hollywood Blvd", lat: 34.1016, lng: -118.3308, note: "Comedy theatre legend" },
+  { name: "Angela Lansbury", cat: "theatre", emoji: "🎭", year: 2013, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3368, note: "Murder She Wrote, Beauty & Beast" },
+
+  // LIVE PERFORMANCE
+  { name: "Cirque du Soleil", cat: "live", emoji: "🎪", year: 2016, address: "6712 Hollywood Blvd", lat: 34.1016, lng: -118.3357, note: "Iconic live performance troupe" },
+  { name: "Bob Fosse", cat: "live", emoji: "🎪", year: 1976, address: "6501 Hollywood Blvd", lat: 34.1016, lng: -118.3316, note: "Cabaret choreographer-director" },
+];
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+let query = '';
+let activeCategory = 'all';
+let selectedStar = null;
+
+// ─── UTILS ───────────────────────────────────────────────────────────────────
+const catConfig = {
+  film:    { label: 'Film',           class: 'cat-film',    iconClass: 'cat-film-icon' },
+  tv:      { label: 'Television',     class: 'cat-tv',      iconClass: 'cat-tv-icon' },
+  music:   { label: 'Music',          class: 'cat-music',   iconClass: 'cat-music-icon' },
+  radio:   { label: 'Radio',          class: 'cat-radio',   iconClass: 'cat-radio-icon' },
+  theatre: { label: 'Theatre',        class: 'cat-theatre', iconClass: 'cat-theatre-icon' },
+  live:    { label: 'Live Perf.',     class: 'cat-live',    iconClass: 'cat-live-icon' },
+};
+
+function getMapUrl(star) {
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(star.name + ' Hollywood Walk of Fame ' + star.address)}`;
+}
+function getDirectionsUrl(star) {
+  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(star.address + ', Hollywood, CA')}`;
+}
+
+// ─── WIKIPEDIA IMAGE CACHE ───────────────────────────────────────────────────
+const imgCache = {};       // name -> first thumb url | null | 'loading'
+const imgMultiCache = {};  // name -> array of urls
+
+async function fetchWikiImage(name) {
+  if (imgCache[name] !== undefined) return imgCache[name];
+  imgCache[name] = 'loading';
+  try {
+    const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(name)}&prop=pageimages&format=json&pithumbsize=120&origin=*`;
+    const res = await fetch(url);
+    const data = await res.json();
+    const pages = data.query.pages;
+    const page = pages[Object.keys(pages)[0]];
+    const thumb = page?.thumbnail?.source || null;
+    imgCache[name] = thumb;
+    return thumb;
+  } catch {
+    imgCache[name] = null;
+    return null;
+  }
+}
+
+// Fetch multiple images for the carousel via Wikipedia's images API
+async function fetchWikiImages(name) {
+  if (imgMultiCache[name]) return imgMultiCache[name];
+  try {
+    // Step 1: get page images list (up to 10 filenames)
+    const listUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(name)}&prop=images&format=json&imlimit=10&origin=*`;
+    const listRes = await fetch(listUrl);
+    const listData = await listRes.json();
+    const pages = listData.query?.pages || {};
+    const page = pages[Object.keys(pages)[0]];
+    const imageFiles = (page?.images || [])
+      .map(i => i.title)
+      .filter(t => /\.(jpg|jpeg|png)$/i.test(t) && !/flag|logo|map|icon|seal|coat|ribbon|signature|stamp|award/i.test(t))
+      .slice(0, 8);
+
+    if (!imageFiles.length) {
+      // Fall back to single thumbnail
+      const thumb = await fetchWikiImage(name);
+      const result = thumb ? [thumb] : [];
+      imgMultiCache[name] = result;
+      return result;
+    }
+
+    // Step 2: get actual thumbnail URLs for those files
+    const titlesParam = imageFiles.join('|');
+    const thumbUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titlesParam)}&prop=imageinfo&iiprop=url|size&iiurlwidth=400&format=json&origin=*`;
+    const thumbRes = await fetch(thumbUrl);
+    const thumbData = await thumbRes.json();
+    const thumbPages = thumbData.query?.pages || {};
+
+    const urls = Object.values(thumbPages)
+      .map(p => p?.imageinfo?.[0]?.thumburl)
+      .filter(u => u && !u.includes('svg'))
+      .slice(0, 5);
+
+    // Always prepend the main thumbnail if we have one
+    const mainThumb = imgCache[name] && imgCache[name] !== 'loading' ? imgCache[name] : null;
+    const allUrls = mainThumb ? [mainThumb, ...urls.filter(u => u !== mainThumb)] : urls;
+    const result = [...new Set(allUrls)].slice(0, 5);
+
+    imgMultiCache[name] = result.length ? result : [];
+    return imgMultiCache[name];
+  } catch {
+    const thumb = imgCache[name] && imgCache[name] !== 'loading' ? [imgCache[name]] : [];
+    imgMultiCache[name] = thumb;
+    return thumb;
+  }
+}
+
+// Preload images for visible stars lazily
+function preloadVisible() {
+  document.querySelectorAll('.thumb-wrap[data-name]').forEach(async wrap => {
+    const name = wrap.dataset.name;
+    if (imgCache[name] && imgCache[name] !== 'loading') {
+      applyThumb(wrap, imgCache[name]);
+      return;
+    }
+    const url = await fetchWikiImage(name);
+    applyThumb(wrap, url);
+  });
+}
+
+function applyThumb(wrap, url) {
+  if (!url || url === 'loading') return;
+  const img = wrap.querySelector('img');
+  if (!img) return;
+  img.src = url;
+  img.onload = () => { img.classList.add('loaded'); wrap.classList.add('has-image'); };
+  img.onerror = () => {};
+}
+
+// ─── BIO CACHE + CLAUDE API ──────────────────────────────────────────────────
+const bioCache = {}; // name -> { blurb, facts[] } | 'loading' | null
+
+async function fetchBio(star) {
+  if (bioCache[star.name]) return bioCache[star.name];
+  bioCache[star.name] = 'loading';
+  try {
+    const prompt = `You are a knowledgeable Hollywood historian. Given the celebrity name and category below, respond ONLY with a valid JSON object — no markdown, no extra text.
+
+Celebrity: ${star.name}
+Category: ${star.cat} (${catConfig[star.cat]?.label})
+Walk of Fame year: ${star.year}
+
+Return exactly this shape:
+{
+  "blurb": "3–5 sentence summary of who they are and their legacy.",
+  "facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5"]
+}
+
+Facts should be punchy, specific, and interesting — notable achievements, records, iconic roles, cultural impact. No generic statements.`;
+
+    const res = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    });
+    const data = await res.json();
+    const text = data.content?.map(b => b.text || '').join('') || '';
+    const clean = text.replace(/```json|```/g, '').trim();
+    const parsed = JSON.parse(clean);
+    bioCache[star.name] = parsed;
+    return parsed;
+  } catch {
+    bioCache[star.name] = null;
+    return null;
+  }
+}
+
+function renderBio(bio) {
+  const el = document.getElementById('bio-section');
+  if (!el) return;
+  if (!bio) {
+    el.innerHTML = `<p class="bio-error">Bio unavailable right now.</p>`;
+    return;
+  }
+  el.innerHTML = `
+    <p class="bio-section-label">About</p>
+    <p class="bio-blurb">${bio.blurb}</p>
+    <p class="bio-section-label">Known For</p>
+    <div class="bio-known-for">
+      ${(bio.facts || []).map(f => `
+        <div class="bio-fact">
+          <div class="bio-fact-dot"></div>
+          <span>${f}</span>
+        </div>`).join('')}
+    </div>
+  `;
+}
+
+function filteredStars() {
+  return STARS.filter(s => {
+    const matchCat = activeCategory === 'all' || s.cat === activeCategory;
+    const q = query.trim().toLowerCase();
+    const matchQuery = !q || s.name.toLowerCase().includes(q) || s.address.toLowerCase().includes(q);
+    return matchCat && matchQuery;
+  });
+}
+
+// ─── RENDER ─────────────────────────────────────────────────────────────────
+function renderFeatured() {
+  const featured = STARS.filter(s => [
+    'Marilyn Monroe','Elvis Presley','Michael Jackson','Audrey Hepburn','The Beatles','Oprah Winfrey'
+  ].includes(s.name));
+  const row = document.getElementById('featured-row');
+  row.innerHTML = featured.map(s => {
+    const cc = catConfig[s.cat];
+    const cached = imgCache[s.name];
+    const imgSrc = (cached && cached !== 'loading') ? cached : '';
+    return `<div class="featured-card" onclick="openDetail('${s.name.replace(/'/g,"\\'")}')">
+      <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}" style="width:40px;height:40px;margin-bottom:8px;border-radius:10px">
+        <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
+        <div class="thumb-placeholder ${cc.iconClass}" style="border-radius:10px;font-size:18px">${s.emoji}</div>
+      </div>
+      <div class="featured-name">${s.name}</div>
+      <div class="featured-cat">${cc.label}</div>
+    </div>`;
+  }).join('');
+  preloadVisible();
+}
+
+function renderList() {
+  const stars = filteredStars();
+  const list = document.getElementById('star-list');
+  const empty = document.getElementById('empty-state');
+  const count = document.getElementById('results-count');
+  const label = document.getElementById('results-label');
+  const featuredSection = document.getElementById('featured-section');
+
+  // Hide featured when searching or filtering
+  featuredSection.style.display = (query || activeCategory !== 'all') ? 'none' : 'block';
+
+  label.textContent = activeCategory === 'all' ? 'All Stars' : catConfig[activeCategory]?.label + ' Stars';
+  count.innerHTML = `<span>${stars.length}</span> star${stars.length !== 1 ? 's' : ''}`;
+
+  if (stars.length === 0) {
+    list.innerHTML = '';
+    empty.classList.add('visible');
+    return;
+  }
+  empty.classList.remove('visible');
+
+  list.innerHTML = stars.map(s => {
+    const cc = catConfig[s.cat];
+    const cached = imgCache[s.name];
+    const imgSrc = (cached && cached !== 'loading') ? cached : '';
+    return `<div class="star-card" onclick="openDetail('${s.name.replace(/'/g,"\\'")}')">
+      <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}">
+        <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
+        <div class="thumb-placeholder ${cc.iconClass}">${s.emoji}</div>
+      </div>
+      <div class="star-info">
+        <div class="star-name">${s.name}</div>
+        <div class="star-meta">
+          <span class="star-category-badge ${cc.class}">${cc.label}</span>
+          <span class="star-address">📍 ${s.address}</span>
+        </div>
+      </div>
+      <svg class="star-chevron" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+    </div>`;
+  }).join('');
+  preloadVisible();
+}
+
+// ─── DETAIL PANEL ────────────────────────────────────────────────────────────
+function openDetail(name) {
+  const star = STARS.find(s => s.name === name);
+  if (!star) return;
+  selectedStar = star;
+  const cc = catConfig[star.cat];
+  const mapUrl = getMapUrl(star);
+  const dirUrl = getDirectionsUrl(star);
+
+  document.getElementById('detail-body').innerHTML = `
+    <div class="carousel-wrap" id="carousel-wrap">
+      <div class="carousel-track" id="carousel-track"></div>
+      <div class="carousel-dots" id="carousel-dots"></div>
+      <button class="carousel-arrow prev hidden" id="carousel-prev" aria-label="Previous">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+      </button>
+      <button class="carousel-arrow next hidden" id="carousel-next" aria-label="Next">
+        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+      </button>
+    </div>
+    <div style="padding:0 0 4px">
+      <div class="detail-name">${star.name}</div>
+      <div class="detail-badges">
+        <span class="detail-badge ${cc.class}">${cc.label}</span>
+        <span class="detail-badge" style="background:var(--accent-light);color:var(--accent)">★ Since ${star.year}</span>
+      </div>
+    </div>
+
+    <div class="bio-section" id="bio-section">
+      <div class="bio-loading">
+        <div class="bio-skel-line skeleton"></div>
+        <div class="bio-skel-line skeleton"></div>
+        <div class="bio-skel-line skeleton"></div>
+        <div class="bio-skel-line skeleton"></div>
+        <div class="bio-skel-line skeleton"></div>
+        <div class="bio-skel-line skeleton"></div>
+        <div class="bio-skel-line skeleton"></div>
+      </div>
+    </div>
+
+    <a href="${mapUrl}" target="_blank" rel="noopener" class="map-section">
+      <div class="map-placeholder">🗺️</div>
+      <div class="map-street">${star.address}</div>
+      <div class="map-sub">Hollywood, CA · Tap to view on map</div>
+    </a>
+
+    <div class="detail-info-rows">
+      <div class="detail-row">
+        <div class="detail-row-icon">📍</div>
+        <div class="detail-row-content">
+          <div class="detail-row-label">Address</div>
+          <div class="detail-row-value">${star.address}, Hollywood, CA</div>
+        </div>
+      </div>
+      <div class="detail-row">
+        <div class="detail-row-icon">💡</div>
+        <div class="detail-row-content">
+          <div class="detail-row-label">Tip</div>
+          <div class="detail-row-value">${star.note}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="detail-actions">
+      <a href="${dirUrl}" target="_blank" rel="noopener" class="btn btn-primary">
+        <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.3"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
+        Get Directions
+      </a>
+      <a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary">
+        <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
+        View on Map
+      </a>
+    </div>
+  `;
+
+  document.getElementById('detail-panel').classList.add('open');
+  document.getElementById('detail-overlay').classList.add('open');
+  document.body.style.overflow = 'hidden';
+
+  // ── BUILD CAROUSEL ──────────────────────────────────────────────────────────
+  let currentSlide = 0;
+  let carouselImages = [];
+
+  function buildCarousel(urls) {
+    const wrap = document.getElementById('carousel-wrap');
+    const track = document.getElementById('carousel-track');
+    const dotsEl = document.getElementById('carousel-dots');
+    const prevBtn = document.getElementById('carousel-prev');
+    const nextBtn = document.getElementById('carousel-next');
+    if (!track) return;
+
+    if (!urls || urls.length === 0) {
+      // Show emoji fallback
+      wrap.outerHTML = `<div class="carousel-fallback">
+        <div class="carousel-fallback-emoji">${star.emoji}</div>
+        <div class="carousel-fallback-label">No photos available</div>
+      </div>`;
+      return;
+    }
+
+    carouselImages = urls;
+
+    // Build slides
+    track.innerHTML = urls.map((url, i) => `
+      <div class="carousel-slide">
+        <div class="carousel-skeleton" id="skel-${i}"></div>
+        <img src="${url}" alt="${star.name}" data-idx="${i}">
+      </div>
+    `).join('');
+
+    // Load images
+    track.querySelectorAll('img').forEach(img => {
+      const idx = parseInt(img.dataset.idx);
+      img.onload = () => {
+        img.classList.add('loaded');
+        const skel = document.getElementById('skel-' + idx);
+        if (skel) skel.classList.add('hidden');
+      };
+      img.onerror = () => {
+        img.closest('.carousel-slide').style.display = 'none';
+      };
+    });
+
+    // Build dots
+    if (urls.length > 1) {
+      dotsEl.innerHTML = urls.map((_, i) =>
+        `<div class="carousel-dot${i === 0 ? ' active' : ''}" data-idx="${i}"></div>`
+      ).join('');
+
+      dotsEl.addEventListener('click', e => {
+        const dot = e.target.closest('[data-idx]');
+        if (dot) goTo(parseInt(dot.dataset.idx));
+      });
+
+      prevBtn.classList.remove('hidden');
+      nextBtn.classList.remove('hidden');
+      prevBtn.addEventListener('click', () => goTo(currentSlide - 1));
+      nextBtn.addEventListener('click', () => goTo(currentSlide + 1));
+    }
+
+    // Touch swipe
+    let tx = 0;
+    track.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, { passive: true });
+    track.addEventListener('touchend', e => {
+      const dx = e.changedTouches[0].clientX - tx;
+      if (Math.abs(dx) > 40) goTo(currentSlide + (dx < 0 ? 1 : -1));
+    }, { passive: true });
+  }
+
+  function goTo(idx) {
+    const urls = carouselImages;
+    if (!urls.length) return;
+    currentSlide = Math.max(0, Math.min(idx, urls.length - 1));
+    const track = document.getElementById('carousel-track');
+    if (track) track.style.transform = `translateX(-${currentSlide * 100}%)`;
+    document.querySelectorAll('.carousel-dot').forEach((d, i) =>
+      d.classList.toggle('active', i === currentSlide)
+    );
+  }
+
+  // Show loading skeleton immediately, then populate
+  const track = document.getElementById('carousel-track');
+  if (track) {
+    track.innerHTML = `<div class="carousel-slide"><div class="carousel-skeleton"></div></div>`;
+  }
+
+  fetchWikiImages(star.name).then(urls => {
+    buildCarousel(urls);
+    // Also cache first image for list thumbnails
+    if (urls.length && !imgCache[star.name]) imgCache[star.name] = urls[0];
+  });
+
+  // Fetch bio from Claude API in parallel
+  fetchBio(star).then(bio => renderBio(bio));
+}
+
+function closeDetail() {
+  document.getElementById('detail-panel').classList.remove('open');
+  document.getElementById('detail-overlay').classList.remove('open');
+  document.body.style.overflow = '';
+  selectedStar = null;
+}
+
+// ─── EVENTS ──────────────────────────────────────────────────────────────────
+document.getElementById('detail-overlay').addEventListener('click', closeDetail);
+
+document.getElementById('search-input').addEventListener('input', e => {
+  query = e.target.value;
+  const clearBtn = document.getElementById('search-clear');
+  clearBtn.classList.toggle('visible', query.length > 0);
+  renderList();
+});
+
+document.getElementById('search-clear').addEventListener('click', () => {
+  const input = document.getElementById('search-input');
+  input.value = '';
+  query = '';
+  document.getElementById('search-clear').classList.remove('visible');
+  input.focus();
+  renderList();
+});
+
+document.getElementById('tabs').addEventListener('click', e => {
+  const tab = e.target.closest('[data-cat]');
+  if (!tab) return;
+  activeCategory = tab.dataset.cat;
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  tab.classList.add('active');
+  renderList();
+});
+
+// Scroll detection for header shadow
+document.getElementById('content').addEventListener('scroll', e => {
+  document.getElementById('header').classList.toggle('scrolled', e.target.scrollTop > 4);
+});
+
+// Swipe down to close detail panel
+let touchStartY = 0;
+document.getElementById('detail-panel').addEventListener('touchstart', e => {
+  touchStartY = e.touches[0].clientY;
+}, { passive: true });
+document.getElementById('detail-panel').addEventListener('touchend', e => {
+  const dy = e.changedTouches[0].clientY - touchStartY;
+  if (dy > 80) closeDetail();
+}, { passive: true });
+
+// ─── WIKIDATA LOADER ─────────────────────────────────────────────────────────
+// Maps Wikidata category labels → our internal cat keys
+const wikidataCatMap = {
+  'motion picture': 'film', 'film': 'film', 'motion pictures': 'film',
+  'television': 'tv', 'tv': 'tv',
+  'recording': 'music', 'music': 'music', 'audio recording': 'music',
+  'radio': 'radio',
+  'theatre': 'theatre', 'theater': 'theatre', 'live theatre': 'theatre',
+  'live performance': 'live', 'live theatre/live performance': 'live',
+  'sports entertainment': 'live',
+};
+
+const catEmojis = { film:'🎬', tv:'📺', music:'🎵', radio:'📻', theatre:'🎭', live:'🎪' };
+
+async function loadWikidataStars() {
+  // SPARQL: fetch all Walk of Fame honorees with name, address, year, category
+  const sparql = `
+    SELECT DISTINCT ?person ?personLabel ?catLabel ?address ?year WHERE {
+      ?person p:P166 ?stmt .
+      ?stmt ps:P166 ?award .
+      ?award wdt:P31 wd:Q17985761 .
+      OPTIONAL { ?stmt pq:P585 ?date . BIND(YEAR(?date) AS ?year) }
+      OPTIONAL { ?stmt pq:P276 ?loc . ?loc wdt:P669 ?street .
+                 OPTIONAL { ?loc wdt:P670 ?housenum }
+                 BIND(CONCAT(COALESCE(?housenum,""), " ", ?streetLabel) AS ?address) }
+      OPTIONAL { ?award wdt:P2888 ?catLabel }
+      SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
+    }
+    ORDER BY ?personLabel
+    LIMIT 3000
+  `;
+  const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
+  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+  const data = await res.json();
+  const rows = data.results?.bindings || [];
+
+  // Deduplicate by name (some stars have multiple entries)
+  const seen = new Set();
+  const stars = [];
+  for (const r of rows) {
+    const name = r.personLabel?.value;
+    if (!name || seen.has(name) || name.startsWith('Q')) continue;
+    seen.add(name);
+
+    const rawCat = (r.catLabel?.value || '').toLowerCase();
+    const cat = wikidataCatMap[rawCat] || 'film';
+    const year = r.year?.value ? parseInt(r.year.value) : null;
+    const address = r.address?.value?.trim() || 'Hollywood Blvd';
+
+    stars.push({
+      name,
+      cat,
+      emoji: catEmojis[cat] || '⭐',
+      year: year || '–',
+      address,
+      lat: 34.1016, lng: -118.3370, // default Walk of Fame coords
+      note: `${catConfig[cat]?.label || 'Entertainment'} honoree on the Hollywood Walk of Fame`
+    });
+  }
+  return stars;
+}
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+async function init() {
+  // Show hardcoded stars immediately so app is usable right away
+  renderFeatured();
+  renderList();
+
+  const banner = document.getElementById('data-loading-bar');
+  const bannerText = document.getElementById('data-loading-text');
+
+  try {
+    bannerText.textContent = 'Loading full Walk of Fame dataset…';
+    const wikistars = await loadWikidataStars();
+
+    if (wikistars.length > 100) {
+      // Merge: keep hardcoded entries for their richer data (addresses, notes),
+      // then add any Wikidata names not already in the list
+      const hardcodedNames = new Set(STARS.map(s => s.name.toLowerCase()));
+      const newStars = wikistars.filter(s => !hardcodedNames.has(s.name.toLowerCase()));
+      STARS.push(...newStars);
+      STARS.sort((a, b) => a.name.localeCompare(b.name));
+
+      bannerText.textContent = `✓ ${STARS.length.toLocaleString()} stars loaded`;
+      banner.style.background = '#EBF5F1';
+      banner.style.color = '#3B7A5A';
+      banner.querySelector('.data-spinner').style.display = 'none';
+
+      // Update badge count
+      document.getElementById('star-count-badge').textContent = `${STARS.length.toLocaleString()}+ Stars`;
+
+      renderFeatured();
+      renderList();
+
+      setTimeout(() => banner.classList.add('hidden'), 3000);
+    } else {
+      throw new Error('Too few results');
+    }
+  } catch (e) {
+    bannerText.textContent = `Showing ${STARS.length} curated stars — full dataset unavailable`;
+    banner.querySelector('.data-spinner').style.display = 'none';
+    setTimeout(() => banner.classList.add('hidden'), 4000);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
