@@ -822,7 +822,7 @@
     </div>
 
     <!-- Data loading banner -->
-    <div class="data-loading-bar" id="data-loading-bar">
+    <div class="data-loading-bar hidden" id="data-loading-bar">
       <div class="data-spinner"></div>
       <span id="data-loading-text">Loading full Walk of Fame dataset…</span>
     </div>
@@ -1404,7 +1404,7 @@ function renderFeatured() {
     const cc = catConfig[s.cat] || catConfig.film;
     const cached = imgCache[s.name];
     const imgSrc = (cached && cached !== 'loading') ? cached : '';
-    return `<div class="featured-card" onclick="openDetail('${s.name.replace(/'/g,"\'")}')">
+    return `<div class="featured-card" data-open="${encodeURIComponent(s.name)}">
       <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}" style="width:40px;height:40px;margin-bottom:8px;border-radius:10px">
         <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
         <div class="thumb-placeholder ${cc.iconClass}" style="border-radius:10px;font-size:18px">${s.emoji}</div>
@@ -1426,7 +1426,7 @@ function buildCard(s) {
   const cc = catConfig[s.cat] || catConfig.film;
   const cached = imgCache[s.name];
   const imgSrc = (cached && cached !== 'loading') ? cached : '';
-  return `<div class="star-card" onclick="openDetail('${s.name.replace(/'/g,"\'").replace(/"/g,'&quot;')}')">
+  return `<div class="star-card" data-open="${encodeURIComponent(s.name)}">
     <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}">
       <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
       <div class="thumb-placeholder ${cc.iconClass}">${s.emoji}</div>
@@ -1552,6 +1552,16 @@ function closeDetail() {
 }
 
 document.getElementById('detail-overlay').addEventListener('click', closeDetail);
+
+// Delegated clicks — handles names with apostrophes/special chars safely
+document.getElementById('featured-row').addEventListener('click', e => {
+  const card = e.target.closest('[data-open]');
+  if (card) openDetail(decodeURIComponent(card.dataset.open));
+});
+document.getElementById('star-list').addEventListener('click', e => {
+  const card = e.target.closest('[data-open]');
+  if (card) openDetail(decodeURIComponent(card.dataset.open));
+});
 
 // ─── SEARCH ──────────────────────────────────────────────────────────────────
 document.getElementById('search').addEventListener('input', e => {
