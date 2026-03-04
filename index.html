@@ -228,21 +228,23 @@
     display: block;
   }
   .thumb-placeholder {
-    width: 44px;
-    height: 44px;
+    width: 52px;
+    height: 62px;
     border-radius: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
     flex-shrink: 0;
-    font-size: 20px;
+    font-size: 22px;
     transition: opacity 0.2s;
   }
   .thumb-wrap {
     position: relative;
-    width: 44px;
-    height: 44px;
+    width: 52px;
+    height: 62px;
     flex-shrink: 0;
+    border-radius: 12px;
+    overflow: hidden;
   }
   .thumb-wrap img {
     position: absolute;
@@ -251,6 +253,7 @@
     height: 100%;
     border-radius: 12px;
     object-fit: cover;
+    object-position: center top;
     opacity: 0;
     transition: opacity 0.3s;
   }
@@ -260,6 +263,7 @@
     inset: 0;
     width: 100%;
     height: 100%;
+    border-radius: 12px;
     transition: opacity 0.3s;
   }
   .thumb-wrap img.loaded + .thumb-placeholder,
@@ -370,6 +374,25 @@
   .detail-icon-wrap { transition: opacity 0.2s; }
   .detail-icon-wrap.hidden { display: none; }
 
+  /* LOAD MORE SENTINEL */
+  .load-more-sentinel {
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 8px;
+  }
+  .load-more-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: none;
+  }
+  .load-more-spinner.visible { display: block; }
+
   /* DATA LOADING BANNER */
   .data-loading-bar {
     display: flex;
@@ -466,9 +489,9 @@
     background: var(--surface);
     border: 1.5px solid var(--border);
     border-radius: var(--radius);
-    padding: 16px;
+    padding: 14px;
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 14px;
     cursor: pointer;
     transition: border-color 0.18s, box-shadow 0.18s, transform 0.15s;
@@ -513,6 +536,16 @@
     padding: 3px 7px;
     border-radius: 6px;
     opacity: 0.85;
+  }
+  .star-known-for {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.4;
+    margin-bottom: 5px;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
   .star-address {
     font-size: 12px;
@@ -800,6 +833,9 @@
       <span class="results-count" id="results-count"><span>0</span> stars</span>
     </div>
     <div class="star-list" id="star-list"></div>
+    <div class="load-more-sentinel" id="load-more-sentinel">
+      <div class="load-more-spinner" id="load-more-spinner"></div>
+    </div>
 
     <div class="empty-state" id="empty-state">
       <div class="empty-star">★</div>
@@ -818,72 +854,9 @@
 </div>
 
 <script>
-// ─── DATA ───────────────────────────────────────────────────────────────────
-// Curated list of well-known Hollywood Walk of Fame stars with real addresses
-const STARS = [
-  // FILM
-  { name: "Marilyn Monroe", cat: "film", emoji: "🎬", year: 1960, address: "6774 Hollywood Blvd", lat: 34.1016, lng: -118.3364, note: "Near Highland Ave intersection" },
-  { name: "Humphrey Bogart", cat: "film", emoji: "🎬", year: 1960, address: "6322 Hollywood Blvd", lat: 34.1017, lng: -118.3278, note: "Classic golden-era star" },
-  { name: "Audrey Hepburn", cat: "film", emoji: "🎬", year: 1960, address: "6828 Hollywood Blvd", lat: 34.1016, lng: -118.3374, note: "Near Chinese Theatre" },
-  { name: "Cary Grant", cat: "film", emoji: "🎬", year: 1960, address: "6301 Hollywood Blvd", lat: 34.1017, lng: -118.3272, note: "Classic Hollywood actor" },
-  { name: "James Dean", cat: "film", emoji: "🎬", year: 1960, address: "1719 Vine St", lat: 34.0982, lng: -118.3268, note: "Rebel Without a Cause star" },
-  { name: "Grace Kelly", cat: "film", emoji: "🎬", year: 1960, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3369, note: "Princess of Monaco" },
-  { name: "Clark Gable", cat: "film", emoji: "🎬", year: 1960, address: "1708 Vine St", lat: 34.0982, lng: -118.3267, note: "Gone with the Wind star" },
-  { name: "Meryl Streep", cat: "film", emoji: "🎬", year: 2004, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3370, note: "Three-time Academy Award winner" },
-  { name: "Tom Hanks", cat: "film", emoji: "🎬", year: 1992, address: "7000 Hollywood Blvd", lat: 34.1017, lng: -118.3398, note: "Two-time Oscar winner" },
-  { name: "Denzel Washington", cat: "film", emoji: "🎬", year: 1998, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3368, note: "Multiple Academy Award winner" },
-  { name: "Julia Roberts", cat: "film", emoji: "🎬", year: 1994, address: "6925 Hollywood Blvd", lat: 34.1016, lng: -118.3387, note: "Pretty Woman star" },
-  { name: "Harrison Ford", cat: "film", emoji: "🎬", year: 2003, address: "6801 Hollywood Blvd", lat: 34.1017, lng: -118.3369, note: "Indiana Jones & Han Solo" },
-  { name: "Clint Eastwood", cat: "film", emoji: "🎬", year: 1984, address: "6767 Hollywood Blvd", lat: 34.1016, lng: -118.3363, note: "Dirty Harry actor-director" },
-  { name: "Steven Spielberg", cat: "film", emoji: "🎬", year: 1986, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3371, note: "Legendary director" },
-  { name: "Robert De Niro", cat: "film", emoji: "🎬", year: 2013, address: "6840 Hollywood Blvd", lat: 34.1016, lng: -118.3376, note: "Raging Bull actor" },
-  { name: "Al Pacino", cat: "film", emoji: "🎬", year: 2007, address: "6834 Hollywood Blvd", lat: 34.1016, lng: -118.3375, note: "Scarface, Godfather" },
-  { name: "Angelina Jolie", cat: "film", emoji: "🎬", year: 2011, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3367, note: "Lara Croft actress" },
-  { name: "Brad Pitt", cat: "film", emoji: "🎬", year: 2012, address: "6801 Hollywood Blvd", lat: 34.1017, lng: -118.3366, note: "Fight Club, Once Upon a Time" },
-  { name: "Leonardo DiCaprio", cat: "film", emoji: "🎬", year: 2022, address: "6931 Hollywood Blvd", lat: 34.1016, lng: -118.3389, note: "The Revenant, Titanic" },
-  { name: "Charlize Theron", cat: "film", emoji: "🎬", year: 2005, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3372, note: "Monster, Mad Max" },
+// ─── DATA (loaded dynamically) ──────────────────────────────────────────────
+let STARS = [];
 
-  // TV
-  { name: "Oprah Winfrey", cat: "tv", emoji: "📺", year: 1994, address: "6269 Hollywood Blvd", lat: 34.1017, lng: -118.3269, note: "Beloved television host" },
-  { name: "Ellen DeGeneres", cat: "tv", emoji: "📺", year: 2012, address: "6834 Hollywood Blvd", lat: 34.1016, lng: -118.3374, note: "Talk show host, comedian" },
-  { name: "Johnny Carson", cat: "tv", emoji: "📺", year: 1987, address: "6279 Hollywood Blvd", lat: 34.1017, lng: -118.3271, note: "The Tonight Show legend" },
-  { name: "Dick Van Dyke", cat: "tv", emoji: "📺", year: 1993, address: "6656 Hollywood Blvd", lat: 34.1016, lng: -118.3344, note: "Mary Poppins, Van Dyke Show" },
-  { name: "Lucille Ball", cat: "tv", emoji: "📺", year: 1960, address: "6436 Hollywood Blvd", lat: 34.1016, lng: -118.3302, note: "I Love Lucy legend" },
-  { name: "Jerry Seinfeld", cat: "tv", emoji: "📺", year: 2002, address: "6100 Hollywood Blvd", lat: 34.1018, lng: -118.3236, note: "Seinfeld creator and star" },
-  { name: "David Letterman", cat: "tv", emoji: "📺", year: 2002, address: "7001 Hollywood Blvd", lat: 34.1018, lng: -118.3399, note: "Late Night legend" },
-  { name: "Jay Leno", cat: "tv", emoji: "📺", year: 1988, address: "6777 Hollywood Blvd", lat: 34.1016, lng: -118.3364, note: "The Tonight Show host" },
-  { name: "Bob Hope", cat: "tv", emoji: "📺", year: 1960, address: "1625 Vine St", lat: 34.0977, lng: -118.3266, note: "Comedy legend" },
-
-  // MUSIC
-  { name: "Michael Jackson", cat: "music", emoji: "🎵", year: 1984, address: "6927 Hollywood Blvd", lat: 34.1016, lng: -118.3388, note: "King of Pop" },
-  { name: "Elvis Presley", cat: "music", emoji: "🎵", year: 1960, address: "6777 Hollywood Blvd", lat: 34.1016, lng: -118.3365, note: "The King of Rock and Roll" },
-  { name: "The Beatles", cat: "music", emoji: "🎵", year: 2012, address: "1750 N Vine St", lat: 34.0985, lng: -118.3270, note: "Legendary rock band" },
-  { name: "Barbra Streisand", cat: "music", emoji: "🎵", year: 1976, address: "6925 Hollywood Blvd", lat: 34.1016, lng: -118.3386, note: "Multi-Grammy winner" },
-  { name: "Frank Sinatra", cat: "music", emoji: "🎵", year: 1960, address: "1600 N Vine St", lat: 34.0976, lng: -118.3265, note: "Ol' Blue Eyes" },
-  { name: "Whitney Houston", cat: "music", emoji: "🎵", year: 1998, address: "6901 Hollywood Blvd", lat: 34.1016, lng: -118.3384, note: "I Will Always Love You singer" },
-  { name: "Madonna", cat: "music", emoji: "🎵", year: 2008, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3373, note: "Queen of Pop" },
-  { name: "Dolly Parton", cat: "music", emoji: "🎵", year: 1984, address: "6712 Hollywood Blvd", lat: 34.1016, lng: -118.3356, note: "Country music icon" },
-  { name: "Prince", cat: "music", emoji: "🎵", year: 1985, address: "6753 Hollywood Blvd", lat: 34.1016, lng: -118.3361, note: "Purple Rain legend" },
-  { name: "David Bowie", cat: "music", emoji: "🎵", year: 1997, address: "6400 Hollywood Blvd", lat: 34.1016, lng: -118.3295, note: "Ziggy Stardust creator" },
-  { name: "Aretha Franklin", cat: "music", emoji: "🎵", year: 1979, address: "1749 Vine St", lat: 34.0985, lng: -118.3269, note: "Queen of Soul" },
-  { name: "Stevie Wonder", cat: "music", emoji: "🎵", year: 1994, address: "6627 Hollywood Blvd", lat: 34.1016, lng: -118.3338, note: "Musical genius" },
-  { name: "Johnny Cash", cat: "music", emoji: "🎵", year: 1976, address: "1717 N Vine St", lat: 34.0982, lng: -118.3268, note: "The Man in Black" },
-  { name: "Tina Turner", cat: "music", emoji: "🎵", year: 1986, address: "6901 Hollywood Blvd", lat: 34.1016, lng: -118.3385, note: "Simply the Best" },
-  { name: "Beyoncé", cat: "music", emoji: "🎵", year: 2006, address: "6840 Hollywood Blvd", lat: 34.1016, lng: -118.3377, note: "Queen Bey" },
-  { name: "Taylor Swift", cat: "music", emoji: "🎵", year: 2022, address: "7080 Hollywood Blvd", lat: 34.1018, lng: -118.3410, note: "Record-breaking pop star" },
-
-  // RADIO
-  { name: "Rush Limbaugh", cat: "radio", emoji: "📻", year: 1993, address: "6269 Hollywood Blvd", lat: 34.1017, lng: -118.3270, note: "Conservative radio host" },
-  { name: "Larry King", cat: "radio", emoji: "📻", year: 1997, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3366, note: "CNN interview legend" },
-
-  // THEATRE
-  { name: "Carol Burnett", cat: "theatre", emoji: "🎭", year: 1974, address: "6468 Hollywood Blvd", lat: 34.1016, lng: -118.3308, note: "Comedy theatre legend" },
-  { name: "Angela Lansbury", cat: "theatre", emoji: "🎭", year: 2013, address: "6801 Hollywood Blvd", lat: 34.1016, lng: -118.3368, note: "Murder She Wrote, Beauty & Beast" },
-
-  // LIVE PERFORMANCE
-  { name: "Cirque du Soleil", cat: "live", emoji: "🎪", year: 2016, address: "6712 Hollywood Blvd", lat: 34.1016, lng: -118.3357, note: "Iconic live performance troupe" },
-  { name: "Bob Fosse", cat: "live", emoji: "🎪", year: 1976, address: "6501 Hollywood Blvd", lat: 34.1016, lng: -118.3316, note: "Cabaret choreographer-director" },
-];
 
 // ─── STATE ───────────────────────────────────────────────────────────────────
 let query = '';
@@ -1094,6 +1067,62 @@ function renderFeatured() {
   preloadVisible();
 }
 
+// ─── PAGINATION ──────────────────────────────────────────────────────────────
+const PAGE_SIZE = 50;
+let currentPage = 0;
+let currentFiltered = [];
+let sentinelObserver = null;
+
+function buildCard(s) {
+  const cc = catConfig[s.cat] || catConfig['film'];
+  const cached = imgCache[s.name];
+  const imgSrc = (cached && cached !== 'loading') ? cached : '';
+  return `<div class="star-card" onclick="openDetail('${s.name.replace(/'/g,"\\'").replace(/"/g,'&quot;')}')">
+    <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}">
+      <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
+      <div class="thumb-placeholder ${cc.iconClass}">${s.emoji}</div>
+    </div>
+    <div class="star-info">
+      <div class="star-name">${s.name}</div>
+      <div class="star-known-for">${s.note}</div>
+      <div class="star-meta">
+        <span class="star-category-badge ${cc.class}">${cc.label}</span>
+        <span class="star-address">📍 ${s.address}</span>
+      </div>
+    </div>
+    <svg class="star-chevron" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
+  </div>`;
+}
+
+function appendPage() {
+  const list = document.getElementById('star-list');
+  const spinner = document.getElementById('load-more-spinner');
+  const start = currentPage * PAGE_SIZE;
+  const slice = currentFiltered.slice(start, start + PAGE_SIZE);
+  if (!slice.length) {
+    if (spinner) spinner.classList.remove('visible');
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  const wrapper = document.createElement('div');
+  wrapper.innerHTML = slice.map(buildCard).join('');
+  while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
+  list.appendChild(frag);
+  currentPage++;
+  preloadVisible();
+  if (spinner) spinner.classList.toggle('visible', currentPage * PAGE_SIZE < currentFiltered.length);
+}
+
+function setupSentinelObserver() {
+  if (sentinelObserver) sentinelObserver.disconnect();
+  const sentinel = document.getElementById('load-more-sentinel');
+  if (!sentinel) return;
+  sentinelObserver = new IntersectionObserver(entries => {
+    if (entries[0].isIntersecting) appendPage();
+  }, { rootMargin: '200px' });
+  sentinelObserver.observe(sentinel);
+}
+
 function renderList() {
   const stars = filteredStars();
   const list = document.getElementById('star-list');
@@ -1101,40 +1130,26 @@ function renderList() {
   const count = document.getElementById('results-count');
   const label = document.getElementById('results-label');
   const featuredSection = document.getElementById('featured-section');
+  const spinner = document.getElementById('load-more-spinner');
 
-  // Hide featured when searching or filtering
   featuredSection.style.display = (query || activeCategory !== 'all') ? 'none' : 'block';
+  label.textContent = activeCategory === 'all' ? 'All Stars' : (catConfig[activeCategory]?.label || '') + ' Stars';
+  count.innerHTML = `<span>${stars.length.toLocaleString()}</span> star${stars.length !== 1 ? 's' : ''}`;
 
-  label.textContent = activeCategory === 'all' ? 'All Stars' : catConfig[activeCategory]?.label + ' Stars';
-  count.innerHTML = `<span>${stars.length}</span> star${stars.length !== 1 ? 's' : ''}`;
+  // Reset pagination
+  currentFiltered = stars;
+  currentPage = 0;
+  list.innerHTML = '';
 
   if (stars.length === 0) {
-    list.innerHTML = '';
     empty.classList.add('visible');
+    if (spinner) spinner.classList.remove('visible');
     return;
   }
   empty.classList.remove('visible');
 
-  list.innerHTML = stars.map(s => {
-    const cc = catConfig[s.cat];
-    const cached = imgCache[s.name];
-    const imgSrc = (cached && cached !== 'loading') ? cached : '';
-    return `<div class="star-card" onclick="openDetail('${s.name.replace(/'/g,"\\'")}')">
-      <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}">
-        <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
-        <div class="thumb-placeholder ${cc.iconClass}">${s.emoji}</div>
-      </div>
-      <div class="star-info">
-        <div class="star-name">${s.name}</div>
-        <div class="star-meta">
-          <span class="star-category-badge ${cc.class}">${cc.label}</span>
-          <span class="star-address">📍 ${s.address}</span>
-        </div>
-      </div>
-      <svg class="star-chevron" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
-    </div>`;
-  }).join('');
-  preloadVisible();
+  appendPage();
+  setupSentinelObserver();
 }
 
 // ─── DETAIL PANEL ────────────────────────────────────────────────────────────
@@ -1363,54 +1378,57 @@ document.getElementById('detail-panel').addEventListener('touchend', e => {
   if (dy > 80) closeDetail();
 }, { passive: true });
 
-// ─── WIKIDATA LOADER ─────────────────────────────────────────────────────────
-// Maps Wikidata category labels → our internal cat keys
-const wikidataCatMap = {
-  'motion picture': 'film', 'film': 'film', 'motion pictures': 'film',
-  'television': 'tv', 'tv': 'tv',
-  'recording': 'music', 'music': 'music', 'audio recording': 'music',
-  'radio': 'radio',
-  'theatre': 'theatre', 'theater': 'theatre', 'live theatre': 'theatre',
-  'live performance': 'live', 'live theatre/live performance': 'live',
-  'sports entertainment': 'live',
-};
+// ─── WIKIDATA LOADER + CACHE + INIT ────────────────────────────────────────────
+const CACHE_KEY = 'wof_stars_v2';
+const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
 const catEmojis = { film:'🎬', tv:'📺', music:'🎵', radio:'📻', theatre:'🎭', live:'🎪' };
 
-async function loadWikidataStars() {
-  // SPARQL: fetch all Walk of Fame honorees with name, address, year, category
-  const sparql = `
-    SELECT DISTINCT ?person ?personLabel ?catLabel ?address ?year WHERE {
-      ?person p:P166 ?stmt .
-      ?stmt ps:P166 ?award .
-      ?award wdt:P31 wd:Q17985761 .
-      OPTIONAL { ?stmt pq:P585 ?date . BIND(YEAR(?date) AS ?year) }
-      OPTIONAL { ?stmt pq:P276 ?loc . ?loc wdt:P669 ?street .
-                 OPTIONAL { ?loc wdt:P670 ?housenum }
-                 BIND(CONCAT(COALESCE(?housenum,""), " ", ?streetLabel) AS ?address) }
-      OPTIONAL { ?award wdt:P2888 ?catLabel }
-      SERVICE wikibase:label { bd:serviceParam wikibase:language "en" . }
-    }
-    ORDER BY ?personLabel
-    LIMIT 3000
-  `;
-  const url = `https://query.wikidata.org/sparql?format=json&query=${encodeURIComponent(sparql)}`;
-  const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-  const data = await res.json();
-  const rows = data.results?.bindings || [];
+const wikidataCatMap = {
+  // Motion picture
+  'motion picture': 'film', 'motion pictures': 'film', 'film': 'film',
+  'movies': 'film', 'cinema': 'film',
+  // Television
+  'television': 'tv', 'tv': 'tv',
+  // Recording / Music
+  'recording': 'music', 'music': 'music', 'audio recording': 'music',
+  'recordings': 'music',
+  // Radio
+  'radio': 'radio',
+  // Theatre
+  'theatre': 'theatre', 'theater': 'theatre',
+  'live theatre': 'theatre', 'live theater': 'theatre',
+  // Live Performance
+  'live performance': 'live', 'live performances': 'live',
+  'live theatre/live performance': 'live',
+  'sports entertainment': 'live',
+};
 
-  // Deduplicate by name (some stars have multiple entries)
+function parseWikidataRows(rows) {
   const seen = new Set();
   const stars = [];
   for (const r of rows) {
     const name = r.personLabel?.value;
-    if (!name || seen.has(name) || name.startsWith('Q')) continue;
+    if (!name || seen.has(name) || /^Q\d+$/.test(name)) continue;
     seen.add(name);
 
-    const rawCat = (r.catLabel?.value || '').toLowerCase();
+    // Category
+    const rawCat = (r.catLabel?.value || r.awardLabel?.value || '').toLowerCase().trim();
     const cat = wikidataCatMap[rawCat] || 'film';
+
+    // Year
     const year = r.year?.value ? parseInt(r.year.value) : null;
-    const address = r.address?.value?.trim() || 'Hollywood Blvd';
+
+    // Address — Wikidata gives street name + optional number
+    let address = 'Hollywood Blvd';
+    if (r.streetLabel?.value) {
+      const num = r.housenum?.value || '';
+      address = (num ? num + ' ' : '') + r.streetLabel.value;
+    }
+
+    // Note: use occupation/description if available, else generic
+    const desc = r.desc?.value || '';
+    const note = desc || `${catConfig[cat]?.label || 'Entertainment'} honoree`;
 
     stars.push({
       name,
@@ -1418,53 +1436,131 @@ async function loadWikidataStars() {
       emoji: catEmojis[cat] || '⭐',
       year: year || '–',
       address,
-      lat: 34.1016, lng: -118.3370, // default Walk of Fame coords
-      note: `${catConfig[cat]?.label || 'Entertainment'} honoree on the Hollywood Walk of Fame`
+      lat: 34.1016,
+      lng: -118.3370,
+      note,
     });
   }
   return stars;
 }
 
-// ─── INIT ────────────────────────────────────────────────────────────────────
-async function init() {
-  // Show hardcoded stars immediately so app is usable right away
+async function fetchAllStars() {
+  // Wikidata SPARQL — fetch all Walk of Fame honorees
+  // Q17985761 = Hollywood Walk of Fame star (the award object)
+  const sparql = `
+    SELECT DISTINCT ?person ?personLabel ?year ?streetLabel ?housenum ?catLabel ?desc WHERE {
+      ?person p:P166 ?stmt .
+      ?stmt ps:P166 ?award .
+      ?award wdt:P31 wd:Q17985761 .
+      OPTIONAL {
+        ?stmt pq:P585 ?date .
+        BIND(YEAR(?date) AS ?year)
+      }
+      OPTIONAL {
+        ?stmt pq:P276 ?loc .
+        ?loc wdt:P669 ?street .
+        OPTIONAL { ?loc wdt:P670 ?housenum }
+      }
+      OPTIONAL { ?award wdt:P2888 ?catLabel }
+      OPTIONAL {
+        ?person schema:description ?desc .
+        FILTER(LANG(?desc) = "en")
+      }
+      SERVICE wikibase:label {
+        bd:serviceParam wikibase:language "en" .
+      }
+    }
+    ORDER BY ?personLabel
+  `;
+
+  const url = 'https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(sparql);
+  const res = await fetch(url, {
+    headers: { 'Accept': 'application/sparql-results+json' }
+  });
+  if (!res.ok) throw new Error('Wikidata fetch failed: ' + res.status);
+  const data = await res.json();
+  return parseWikidataRows(data.results?.bindings || []);
+}
+
+function applyStars(stars) {
+  STARS.length = 0;
+  STARS.push(...stars);
+  STARS.sort((a, b) => a.name.localeCompare(b.name));
+  document.getElementById('star-count-badge').textContent = `${STARS.length.toLocaleString()} Stars`;
   renderFeatured();
   renderList();
+}
 
-  const banner = document.getElementById('data-loading-bar');
-  const bannerText = document.getElementById('data-loading-text');
+function showBanner(text, type = 'loading') {
+  const bar = document.getElementById('data-loading-bar');
+  const textEl = document.getElementById('data-loading-text');
+  const spinner = bar.querySelector('.data-spinner');
+  bar.classList.remove('hidden');
+  textEl.textContent = text;
+  if (type === 'success') {
+    bar.style.background = '#EBF5F1';
+    bar.style.color = '#3B7A5A';
+    if (spinner) spinner.style.display = 'none';
+    setTimeout(() => bar.classList.add('hidden'), 3500);
+  } else if (type === 'error') {
+    bar.style.background = '#F8EBEB';
+    bar.style.color = '#8A3B3B';
+    if (spinner) spinner.style.display = 'none';
+    setTimeout(() => bar.classList.add('hidden'), 5000);
+  } else {
+    bar.style.background = '';
+    bar.style.color = '';
+    if (spinner) spinner.style.display = '';
+  }
+}
+
+async function init() {
+  // ── 1. Try localStorage cache ─────────────────────────────────────────────
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (raw) {
+      const { timestamp, stars } = JSON.parse(raw);
+      if (Date.now() - timestamp < CACHE_TTL_MS && Array.isArray(stars) && stars.length > 200) {
+        applyStars(stars);
+        document.getElementById('data-loading-bar').classList.add('hidden');
+
+        // Silent background refresh if older than 3 days
+        if (Date.now() - timestamp > 3 * 24 * 60 * 60 * 1000) {
+          fetchAllStars().then(stars => {
+            try { localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stars })); } catch(e) {}
+          }).catch(() => {});
+        }
+        return;
+      }
+    }
+  } catch(e) { /* storage unavailable */ }
+
+  // ── 2. First load — fetch from Wikidata ───────────────────────────────────
+  showBanner('Loading Walk of Fame stars from Wikidata…');
+
+  // Show empty state with spinner while loading
+  renderList();
 
   try {
-    bannerText.textContent = 'Loading full Walk of Fame dataset…';
-    const wikistars = await loadWikidataStars();
+    const stars = await fetchAllStars();
 
-    if (wikistars.length > 100) {
-      // Merge: keep hardcoded entries for their richer data (addresses, notes),
-      // then add any Wikidata names not already in the list
-      const hardcodedNames = new Set(STARS.map(s => s.name.toLowerCase()));
-      const newStars = wikistars.filter(s => !hardcodedNames.has(s.name.toLowerCase()));
-      STARS.push(...newStars);
-      STARS.sort((a, b) => a.name.localeCompare(b.name));
+    if (stars.length < 100) throw new Error('Too few results returned');
 
-      bannerText.textContent = `✓ ${STARS.length.toLocaleString()} stars loaded`;
-      banner.style.background = '#EBF5F1';
-      banner.style.color = '#3B7A5A';
-      banner.querySelector('.data-spinner').style.display = 'none';
+    // Save to cache
+    try {
+      localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stars }));
+    } catch(e) { /* storage full */ }
 
-      // Update badge count
-      document.getElementById('star-count-badge').textContent = `${STARS.length.toLocaleString()}+ Stars`;
+    applyStars(stars);
+    showBanner(`✓ ${stars.length.toLocaleString()} stars loaded`, 'success');
 
-      renderFeatured();
-      renderList();
-
-      setTimeout(() => banner.classList.add('hidden'), 3000);
-    } else {
-      throw new Error('Too few results');
-    }
-  } catch (e) {
-    bannerText.textContent = `Showing ${STARS.length} curated stars — full dataset unavailable`;
-    banner.querySelector('.data-spinner').style.display = 'none';
-    setTimeout(() => banner.classList.add('hidden'), 4000);
+  } catch(err) {
+    console.error('Wikidata load failed:', err);
+    showBanner('Could not load star data — check your connection and reload', 'error');
+    // Show empty state
+    document.getElementById('empty-state').classList.add('visible');
+    document.getElementById('empty-state').querySelector('.empty-title').textContent = 'Could not load stars';
+    document.getElementById('empty-state').querySelector('.empty-sub').textContent = 'Check your connection and refresh the page.';
   }
 }
 
