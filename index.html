@@ -854,743 +854,473 @@
 </div>
 
 <script>
-// ─── DATA (loaded dynamically) ──────────────────────────────────────────────
-let STARS = [];
-
-
-// ─── STATE ───────────────────────────────────────────────────────────────────
-let query = '';
-let activeCategory = 'all';
-let selectedStar = null;
-
-// ─── UTILS ───────────────────────────────────────────────────────────────────
-const catConfig = {
-  film:    { label: 'Film',           class: 'cat-film',    iconClass: 'cat-film-icon' },
-  tv:      { label: 'Television',     class: 'cat-tv',      iconClass: 'cat-tv-icon' },
-  music:   { label: 'Music',          class: 'cat-music',   iconClass: 'cat-music-icon' },
-  radio:   { label: 'Radio',          class: 'cat-radio',   iconClass: 'cat-radio-icon' },
-  theatre: { label: 'Theatre',        class: 'cat-theatre', iconClass: 'cat-theatre-icon' },
-  live:    { label: 'Live Perf.',     class: 'cat-live',    iconClass: 'cat-live-icon' },
-};
-
-function getMapUrl(star) {
-  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(star.name + ' Hollywood Walk of Fame ' + star.address)}`;
-}
-function getDirectionsUrl(star) {
-  return `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(star.address + ', Hollywood, CA')}`;
-}
-
-// ─── WIKIPEDIA IMAGE CACHE ───────────────────────────────────────────────────
-const imgCache = {};       // name -> first thumb url | null | 'loading'
-const imgMultiCache = {};  // name -> array of urls
-
-async function fetchWikiImage(name) {
-  if (imgCache[name] !== undefined) return imgCache[name];
-  imgCache[name] = 'loading';
-  try {
-    const url = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(name)}&prop=pageimages&format=json&pithumbsize=120&origin=*`;
-    const res = await fetch(url);
-    const data = await res.json();
-    const pages = data.query.pages;
-    const page = pages[Object.keys(pages)[0]];
-    const thumb = page?.thumbnail?.source || null;
-    imgCache[name] = thumb;
-    return thumb;
-  } catch {
-    imgCache[name] = null;
-    return null;
-  }
-}
-
-// Fetch multiple images for the carousel via Wikipedia's images API
-async function fetchWikiImages(name) {
-  if (imgMultiCache[name]) return imgMultiCache[name];
-  try {
-    // Step 1: get page images list (up to 10 filenames)
-    const listUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(name)}&prop=images&format=json&imlimit=10&origin=*`;
-    const listRes = await fetch(listUrl);
-    const listData = await listRes.json();
-    const pages = listData.query?.pages || {};
-    const page = pages[Object.keys(pages)[0]];
-    const imageFiles = (page?.images || [])
-      .map(i => i.title)
-      .filter(t => /\.(jpg|jpeg|png)$/i.test(t) && !/flag|logo|map|icon|seal|coat|ribbon|signature|stamp|award/i.test(t))
-      .slice(0, 8);
-
-    if (!imageFiles.length) {
-      // Fall back to single thumbnail
-      const thumb = await fetchWikiImage(name);
-      const result = thumb ? [thumb] : [];
-      imgMultiCache[name] = result;
-      return result;
-    }
-
-    // Step 2: get actual thumbnail URLs for those files
-    const titlesParam = imageFiles.join('|');
-    const thumbUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(titlesParam)}&prop=imageinfo&iiprop=url|size&iiurlwidth=400&format=json&origin=*`;
-    const thumbRes = await fetch(thumbUrl);
-    const thumbData = await thumbRes.json();
-    const thumbPages = thumbData.query?.pages || {};
-
-    const urls = Object.values(thumbPages)
-      .map(p => p?.imageinfo?.[0]?.thumburl)
-      .filter(u => u && !u.includes('svg'))
-      .slice(0, 5);
-
-    // Always prepend the main thumbnail if we have one
-    const mainThumb = imgCache[name] && imgCache[name] !== 'loading' ? imgCache[name] : null;
-    const allUrls = mainThumb ? [mainThumb, ...urls.filter(u => u !== mainThumb)] : urls;
-    const result = [...new Set(allUrls)].slice(0, 5);
-
-    imgMultiCache[name] = result.length ? result : [];
-    return imgMultiCache[name];
-  } catch {
-    const thumb = imgCache[name] && imgCache[name] !== 'loading' ? [imgCache[name]] : [];
-    imgMultiCache[name] = thumb;
-    return thumb;
-  }
-}
-
-// Preload images for visible stars lazily
-function preloadVisible() {
-  document.querySelectorAll('.thumb-wrap[data-name]').forEach(async wrap => {
-    const name = wrap.dataset.name;
-    if (imgCache[name] && imgCache[name] !== 'loading') {
-      applyThumb(wrap, imgCache[name]);
-      return;
-    }
-    const url = await fetchWikiImage(name);
-    applyThumb(wrap, url);
-  });
-}
-
-function applyThumb(wrap, url) {
-  if (!url || url === 'loading') return;
-  const img = wrap.querySelector('img');
-  if (!img) return;
-  img.src = url;
-  img.onload = () => { img.classList.add('loaded'); wrap.classList.add('has-image'); };
-  img.onerror = () => {};
-}
-
-// ─── BIO CACHE + CLAUDE API ──────────────────────────────────────────────────
-const bioCache = {}; // name -> { blurb, facts[] } | 'loading' | null
-
-async function fetchBio(star) {
-  if (bioCache[star.name]) return bioCache[star.name];
-  bioCache[star.name] = 'loading';
-  try {
-    const prompt = `You are a knowledgeable Hollywood historian. Given the celebrity name and category below, respond ONLY with a valid JSON object — no markdown, no extra text.
-
-Celebrity: ${star.name}
-Category: ${star.cat} (${catConfig[star.cat]?.label})
-Walk of Fame year: ${star.year}
-
-Return exactly this shape:
-{
-  "blurb": "3–5 sentence summary of who they are and their legacy.",
-  "facts": ["fact 1", "fact 2", "fact 3", "fact 4", "fact 5"]
-}
-
-Facts should be punchy, specific, and interesting — notable achievements, records, iconic roles, cultural impact. No generic statements.`;
-
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-    const data = await res.json();
-    const text = data.content?.map(b => b.text || '').join('') || '';
-    const clean = text.replace(/```json|```/g, '').trim();
-    const parsed = JSON.parse(clean);
-    bioCache[star.name] = parsed;
-    return parsed;
-  } catch {
-    bioCache[star.name] = null;
-    return null;
-  }
-}
-
-function renderBio(bio) {
-  const el = document.getElementById('bio-section');
-  if (!el) return;
-  if (!bio) {
-    el.innerHTML = `<p class="bio-error">Bio unavailable right now.</p>`;
-    return;
-  }
-  el.innerHTML = `
-    <p class="bio-section-label">About</p>
-    <p class="bio-blurb">${bio.blurb}</p>
-    <p class="bio-section-label">Known For</p>
-    <div class="bio-known-for">
-      ${(bio.facts || []).map(f => `
-        <div class="bio-fact">
-          <div class="bio-fact-dot"></div>
-          <span>${f}</span>
-        </div>`).join('')}
-    </div>
-  `;
-}
-
-function filteredStars() {
-  return STARS.filter(s => {
-    const matchCat = activeCategory === 'all' || s.cat === activeCategory;
-    const q = query.trim().toLowerCase();
-    const matchQuery = !q || s.name.toLowerCase().includes(q) || s.address.toLowerCase().includes(q);
-    return matchCat && matchQuery;
-  });
-}
-
-// ─── RENDER ─────────────────────────────────────────────────────────────────
-function renderFeatured() {
-  const featured = STARS.filter(s => [
-    'Marilyn Monroe','Elvis Presley','Michael Jackson','Audrey Hepburn','The Beatles','Oprah Winfrey'
-  ].includes(s.name));
-  const row = document.getElementById('featured-row');
-  row.innerHTML = featured.map(s => {
-    const cc = catConfig[s.cat];
-    const cached = imgCache[s.name];
-    const imgSrc = (cached && cached !== 'loading') ? cached : '';
-    return `<div class="featured-card" onclick="openDetail('${s.name.replace(/'/g,"\\'")}')">
-      <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}" style="width:40px;height:40px;margin-bottom:8px;border-radius:10px">
-        <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
-        <div class="thumb-placeholder ${cc.iconClass}" style="border-radius:10px;font-size:18px">${s.emoji}</div>
-      </div>
-      <div class="featured-name">${s.name}</div>
-      <div class="featured-cat">${cc.label}</div>
-    </div>`;
-  }).join('');
-  preloadVisible();
-}
-
-// ─── PAGINATION ──────────────────────────────────────────────────────────────
-const PAGE_SIZE = 50;
-let currentPage = 0;
-let currentFiltered = [];
-let sentinelObserver = null;
-
-function buildCard(s) {
-  const cc = catConfig[s.cat] || catConfig['film'];
-  const cached = imgCache[s.name];
-  const imgSrc = (cached && cached !== 'loading') ? cached : '';
-  return `<div class="star-card" onclick="openDetail('${s.name.replace(/'/g,"\\'").replace(/"/g,'&quot;')}')">
-    <div class="thumb-wrap${imgSrc ? ' has-image' : ''}" data-name="${s.name.replace(/"/g,'&quot;')}">
-      <img src="${imgSrc}" alt="${s.name}" ${imgSrc ? 'class="loaded"' : ''}>
-      <div class="thumb-placeholder ${cc.iconClass}">${s.emoji}</div>
-    </div>
-    <div class="star-info">
-      <div class="star-name">${s.name}</div>
-      <div class="star-known-for">${s.note}</div>
-      <div class="star-meta">
-        <span class="star-category-badge ${cc.class}">${cc.label}</span>
-        <span class="star-address">📍 ${s.address}</span>
-      </div>
-    </div>
-    <svg class="star-chevron" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
-  </div>`;
-}
-
-function appendPage() {
-  const list = document.getElementById('star-list');
-  const spinner = document.getElementById('load-more-spinner');
-  const start = currentPage * PAGE_SIZE;
-  const slice = currentFiltered.slice(start, start + PAGE_SIZE);
-  if (!slice.length) {
-    if (spinner) spinner.classList.remove('visible');
-    return;
-  }
-  const frag = document.createDocumentFragment();
-  const wrapper = document.createElement('div');
-  wrapper.innerHTML = slice.map(buildCard).join('');
-  while (wrapper.firstChild) frag.appendChild(wrapper.firstChild);
-  list.appendChild(frag);
-  currentPage++;
-  preloadVisible();
-  if (spinner) spinner.classList.toggle('visible', currentPage * PAGE_SIZE < currentFiltered.length);
-}
-
-function setupSentinelObserver() {
-  if (sentinelObserver) sentinelObserver.disconnect();
-  const sentinel = document.getElementById('load-more-sentinel');
-  if (!sentinel) return;
-  sentinelObserver = new IntersectionObserver(entries => {
-    if (entries[0].isIntersecting) appendPage();
-  }, { rootMargin: '200px' });
-  sentinelObserver.observe(sentinel);
-}
-
-function renderList() {
-  const stars = filteredStars();
-  const list = document.getElementById('star-list');
-  const empty = document.getElementById('empty-state');
-  const count = document.getElementById('results-count');
-  const label = document.getElementById('results-label');
-  const featuredSection = document.getElementById('featured-section');
-  const spinner = document.getElementById('load-more-spinner');
-
-  featuredSection.style.display = (query || activeCategory !== 'all') ? 'none' : 'block';
-  label.textContent = activeCategory === 'all' ? 'All Stars' : (catConfig[activeCategory]?.label || '') + ' Stars';
-  count.innerHTML = `<span>${stars.length.toLocaleString()}</span> star${stars.length !== 1 ? 's' : ''}`;
-
-  // Reset pagination
-  currentFiltered = stars;
-  currentPage = 0;
-  list.innerHTML = '';
-
-  if (stars.length === 0) {
-    empty.classList.add('visible');
-    if (spinner) spinner.classList.remove('visible');
-    return;
-  }
-  empty.classList.remove('visible');
-
-  appendPage();
-  setupSentinelObserver();
-}
-
-// ─── DETAIL PANEL ────────────────────────────────────────────────────────────
-function openDetail(name) {
-  const star = STARS.find(s => s.name === name);
-  if (!star) return;
-  selectedStar = star;
-  const cc = catConfig[star.cat];
-  const mapUrl = getMapUrl(star);
-  const dirUrl = getDirectionsUrl(star);
-
-  document.getElementById('detail-body').innerHTML = `
-    <div class="carousel-wrap" id="carousel-wrap">
-      <div class="carousel-track" id="carousel-track"></div>
-      <div class="carousel-dots" id="carousel-dots"></div>
-      <button class="carousel-arrow prev hidden" id="carousel-prev" aria-label="Previous">
-        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
-      </button>
-      <button class="carousel-arrow next hidden" id="carousel-next" aria-label="Next">
-        <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5"><path d="M9 18l6-6-6-6"/></svg>
-      </button>
-    </div>
-    <div style="padding:0 0 4px">
-      <div class="detail-name">${star.name}</div>
-      <div class="detail-badges">
-        <span class="detail-badge ${cc.class}">${cc.label}</span>
-        <span class="detail-badge" style="background:var(--accent-light);color:var(--accent)">★ Since ${star.year}</span>
-      </div>
-    </div>
-
-    <div class="bio-section" id="bio-section">
-      <div class="bio-loading">
-        <div class="bio-skel-line skeleton"></div>
-        <div class="bio-skel-line skeleton"></div>
-        <div class="bio-skel-line skeleton"></div>
-        <div class="bio-skel-line skeleton"></div>
-        <div class="bio-skel-line skeleton"></div>
-        <div class="bio-skel-line skeleton"></div>
-        <div class="bio-skel-line skeleton"></div>
-      </div>
-    </div>
-
-    <a href="${mapUrl}" target="_blank" rel="noopener" class="map-section">
-      <div class="map-placeholder">🗺️</div>
-      <div class="map-street">${star.address}</div>
-      <div class="map-sub">Hollywood, CA · Tap to view on map</div>
-    </a>
-
-    <div class="detail-info-rows">
-      <div class="detail-row">
-        <div class="detail-row-icon">📍</div>
-        <div class="detail-row-content">
-          <div class="detail-row-label">Address</div>
-          <div class="detail-row-value">${star.address}, Hollywood, CA</div>
-        </div>
-      </div>
-      <div class="detail-row">
-        <div class="detail-row-icon">💡</div>
-        <div class="detail-row-content">
-          <div class="detail-row-label">Tip</div>
-          <div class="detail-row-value">${star.note}</div>
-        </div>
-      </div>
-    </div>
-
-    <div class="detail-actions">
-      <a href="${dirUrl}" target="_blank" rel="noopener" class="btn btn-primary">
-        <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.3"><path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5s1.12-2.5 2.5-2.5 2.5 1.12 2.5 2.5-1.12 2.5-2.5 2.5z"/></svg>
-        Get Directions
-      </a>
-      <a href="${mapUrl}" target="_blank" rel="noopener" class="btn btn-secondary">
-        <svg width="17" height="17" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg>
-        View on Map
-      </a>
-    </div>
-  `;
-
-  document.getElementById('detail-panel').classList.add('open');
-  document.getElementById('detail-overlay').classList.add('open');
-  document.body.style.overflow = 'hidden';
-
-  // ── BUILD CAROUSEL ──────────────────────────────────────────────────────────
-  let currentSlide = 0;
-  let carouselImages = [];
-
-  function buildCarousel(urls) {
-    const wrap = document.getElementById('carousel-wrap');
-    const track = document.getElementById('carousel-track');
-    const dotsEl = document.getElementById('carousel-dots');
-    const prevBtn = document.getElementById('carousel-prev');
-    const nextBtn = document.getElementById('carousel-next');
-    if (!track) return;
-
-    if (!urls || urls.length === 0) {
-      // Show emoji fallback
-      wrap.outerHTML = `<div class="carousel-fallback">
-        <div class="carousel-fallback-emoji">${star.emoji}</div>
-        <div class="carousel-fallback-label">No photos available</div>
-      </div>`;
-      return;
-    }
-
-    carouselImages = urls;
-
-    // Build slides
-    track.innerHTML = urls.map((url, i) => `
-      <div class="carousel-slide">
-        <div class="carousel-skeleton" id="skel-${i}"></div>
-        <img src="${url}" alt="${star.name}" data-idx="${i}">
-      </div>
-    `).join('');
-
-    // Load images
-    track.querySelectorAll('img').forEach(img => {
-      const idx = parseInt(img.dataset.idx);
-      img.onload = () => {
-        img.classList.add('loaded');
-        const skel = document.getElementById('skel-' + idx);
-        if (skel) skel.classList.add('hidden');
-      };
-      img.onerror = () => {
-        img.closest('.carousel-slide').style.display = 'none';
-      };
-    });
-
-    // Build dots
-    if (urls.length > 1) {
-      dotsEl.innerHTML = urls.map((_, i) =>
-        `<div class="carousel-dot${i === 0 ? ' active' : ''}" data-idx="${i}"></div>`
-      ).join('');
-
-      dotsEl.addEventListener('click', e => {
-        const dot = e.target.closest('[data-idx]');
-        if (dot) goTo(parseInt(dot.dataset.idx));
-      });
-
-      prevBtn.classList.remove('hidden');
-      nextBtn.classList.remove('hidden');
-      prevBtn.addEventListener('click', () => goTo(currentSlide - 1));
-      nextBtn.addEventListener('click', () => goTo(currentSlide + 1));
-    }
-
-    // Touch swipe
-    let tx = 0;
-    track.addEventListener('touchstart', e => { tx = e.touches[0].clientX; }, { passive: true });
-    track.addEventListener('touchend', e => {
-      const dx = e.changedTouches[0].clientX - tx;
-      if (Math.abs(dx) > 40) goTo(currentSlide + (dx < 0 ? 1 : -1));
-    }, { passive: true });
-  }
-
-  function goTo(idx) {
-    const urls = carouselImages;
-    if (!urls.length) return;
-    currentSlide = Math.max(0, Math.min(idx, urls.length - 1));
-    const track = document.getElementById('carousel-track');
-    if (track) track.style.transform = `translateX(-${currentSlide * 100}%)`;
-    document.querySelectorAll('.carousel-dot').forEach((d, i) =>
-      d.classList.toggle('active', i === currentSlide)
-    );
-  }
-
-  // Show loading skeleton immediately, then populate
-  const track = document.getElementById('carousel-track');
-  if (track) {
-    track.innerHTML = `<div class="carousel-slide"><div class="carousel-skeleton"></div></div>`;
-  }
-
-  fetchWikiImages(star.name).then(urls => {
-    buildCarousel(urls);
-    // Also cache first image for list thumbnails
-    if (urls.length && !imgCache[star.name]) imgCache[star.name] = urls[0];
-  });
-
-  // Fetch bio from Claude API in parallel
-  fetchBio(star).then(bio => renderBio(bio));
-}
-
-function closeDetail() {
-  document.getElementById('detail-panel').classList.remove('open');
-  document.getElementById('detail-overlay').classList.remove('open');
-  document.body.style.overflow = '';
-  selectedStar = null;
-}
-
-// ─── EVENTS ──────────────────────────────────────────────────────────────────
-document.getElementById('detail-overlay').addEventListener('click', closeDetail);
-
-document.getElementById('search-input').addEventListener('input', e => {
-  query = e.target.value;
-  const clearBtn = document.getElementById('search-clear');
-  clearBtn.classList.toggle('visible', query.length > 0);
-  renderList();
-});
-
-document.getElementById('search-clear').addEventListener('click', () => {
-  const input = document.getElementById('search-input');
-  input.value = '';
-  query = '';
-  document.getElementById('search-clear').classList.remove('visible');
-  input.focus();
-  renderList();
-});
-
-document.getElementById('tabs').addEventListener('click', e => {
-  const tab = e.target.closest('[data-cat]');
-  if (!tab) return;
-  activeCategory = tab.dataset.cat;
-  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-  tab.classList.add('active');
-  renderList();
-});
-
-// Scroll detection for header shadow
-document.getElementById('content').addEventListener('scroll', e => {
-  document.getElementById('header').classList.toggle('scrolled', e.target.scrollTop > 4);
-});
-
-// Swipe down to close detail panel
-let touchStartY = 0;
-document.getElementById('detail-panel').addEventListener('touchstart', e => {
-  touchStartY = e.touches[0].clientY;
-}, { passive: true });
-document.getElementById('detail-panel').addEventListener('touchend', e => {
-  const dy = e.changedTouches[0].clientY - touchStartY;
-  if (dy > 80) closeDetail();
-}, { passive: true });
-
-// ─── WIKIDATA LOADER + CACHE + INIT ────────────────────────────────────────────
-const CACHE_KEY = 'wof_stars_v3';
-const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
-
-// Clear any old cache versions
-try { ['wof_stars_v1','wof_stars_v2'].forEach(k => localStorage.removeItem(k)); } catch(e) {}
-
-const catEmojis = { film:'🎬', tv:'📺', music:'🎵', radio:'📻', theatre:'🎭', live:'🎪' };
-
-const wikidataCatMap = {
-  // Motion picture
-  'motion picture': 'film', 'motion pictures': 'film', 'film': 'film',
-  'movies': 'film', 'cinema': 'film',
-  // Television
-  'television': 'tv', 'tv': 'tv',
-  // Recording / Music
-  'recording': 'music', 'music': 'music', 'audio recording': 'music',
-  'recordings': 'music',
-  // Radio
-  'radio': 'radio',
-  // Theatre
-  'theatre': 'theatre', 'theater': 'theatre',
-  'live theatre': 'theatre', 'live theater': 'theatre',
-  // Live Performance
-  'live performance': 'live', 'live performances': 'live',
-  'live theatre/live performance': 'live',
-  'sports entertainment': 'live',
-};
-
-function parseWikidataRows(rows) {
-  const seen = new Set();
-  const stars = [];
-  for (const r of rows) {
-    const name = r.personLabel?.value;
-    if (!name || seen.has(name) || /^Q\d+$/.test(name)) continue;
-    seen.add(name);
-
-    // Category — try award label first, fall back to description keywords
-    const rawCat = (r.catLabel?.value || '').toLowerCase().trim();
-    let cat = wikidataCatMap[rawCat] || null;
-    if (!cat) {
-      // Try to infer from English description
-      const desc = (r.desc?.value || '').toLowerCase();
-      if (/\b(actor|actress|director|film|movie|cinema|screen)\b/.test(desc)) cat = 'film';
-      else if (/\b(singer|musician|band|rapper|recording|album|songwriter)\b/.test(desc)) cat = 'music';
-      else if (/\b(television|tv|host|presenter|talk show|sitcom)\b/.test(desc)) cat = 'tv';
-      else if (/\b(radio)\b/.test(desc)) cat = 'radio';
-      else if (/\b(theatre|theater|broadway|stage)\b/.test(desc)) cat = 'theatre';
-      else if (/\b(performer|comedian|magician|circus|stunt)\b/.test(desc)) cat = 'live';
-      else cat = 'film'; // default
-    }
-
-    const year = r.year?.value ? parseInt(r.year.value) : null;
-    const desc = r.desc?.value || '';
-    // Capitalise first letter of description for the note
-    const note = desc ? desc.charAt(0).toUpperCase() + desc.slice(1) : `${catConfig[cat]?.label || 'Entertainment'} honoree`;
-
-    stars.push({
-      name,
-      cat,
-      emoji: catEmojis[cat] || '⭐',
-      year: year || '–',
-      address: 'Hollywood Blvd', // Wikidata address data is sparse; directions use name-based search
-      lat: 34.1016,
-      lng: -118.3370,
-      note,
-    });
-  }
-  return stars;
-}
-
-// Fetch one page of results from Wikidata (limit/offset pagination)
-async function fetchPage(offset, limit = 500) {
-  // Simplified query — just person, label, year, category
-  // Q17985761 = Hollywood Walk of Fame star item
-  // Keeping it lean avoids query timeouts
-  const sparql = `
-    SELECT DISTINCT ?person ?personLabel ?year ?catLabel ?desc WHERE {
-      ?person wdt:P166 ?award .
-      ?award wdt:P31 wd:Q17985761 .
-      OPTIONAL {
-        ?person p:P166 ?stmt .
-        ?stmt ps:P166 ?award2 .
-        ?award2 wdt:P31 wd:Q17985761 .
-        ?stmt pq:P585 ?date .
-        BIND(YEAR(?date) AS ?year)
-      }
-      OPTIONAL { ?award wdt:P2888 ?catLabel }
-      OPTIONAL {
-        ?person schema:description ?desc .
-        FILTER(LANG(?desc) = "en")
-      }
-      SERVICE wikibase:label {
-        bd:serviceParam wikibase:language "en" .
-      }
-    }
-    ORDER BY ?personLabel
-    LIMIT ${limit}
-    OFFSET ${offset}
-  `;
-  const url = 'https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(sparql);
-  const res = await fetch(url, { headers: { 'Accept': 'application/sparql-results+json' } });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  return data.results?.bindings || [];
-}
-
-async function fetchAllStars() {
-  const PAGE = 500;
-  let allRows = [];
-  let offset = 0;
-  let attempts = 0;
-  const MAX_PAGES = 8; // safety cap: 8 × 500 = 4,000 max
-
-  showBanner(`Fetching stars… (page 1)`);
-
-  while (attempts < MAX_PAGES) {
-    const rows = await fetchPage(offset, PAGE);
-    allRows = allRows.concat(rows);
-    attempts++;
-
-    showBanner(`Fetching stars… (${allRows.length} so far)`);
-
-    // If fewer than PAGE results came back, we've hit the end
-    if (rows.length < PAGE) break;
-    offset += PAGE;
-  }
-
-  return parseWikidataRows(allRows);
-}
-
-function applyStars(stars) {
-  STARS.length = 0;
-  STARS.push(...stars);
-  STARS.sort((a, b) => a.name.localeCompare(b.name));
+// ─── DATA ───────────────────────────────────────────────────────────────────
+let STARS = [
+  {name:"Aaron Spelling",cat:"tv",emoji:"\ud83d\udcfa",year:1995,address:"6915 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dynasty, Beverly Hills 90210, TV mega-producer"},
+  {name:"Abbott and Costello",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6300 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Legendary 1940s\u201350s comedy duo"},
+  {name:"Adam West",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6501 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Batman's Caped Crusader TV icon"},
+  {name:"Adele",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hello, Rolling in the Deep, Someone Like You"},
+  {name:"Aerosmith",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dream On, Walk This Way, I Don't Want to Miss a Thing"},
+  {name:"Al Green",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Let's Stay Together, Tired of Being Alone"},
+  {name:"Al Pacino",cat:"film",emoji:"\ud83c\udfac",year:2007,address:"6834 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Scarface, The Godfather, Serpico"},
+  {name:"Alan Alda",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"M*A*S*H's Hawkeye Pierce"},
+  {name:"Alan Ladd",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1601 Vine St",lat:34.1016,lng:-118.3370,note:"Shane and This Gun for Hire actor"},
+  {name:"Alec Guinness",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Obi-Wan Kenobi and The Bridge on the River Kwai"},
+  {name:"Alex Trebek",cat:"tv",emoji:"\ud83d\udcfa",year:2014,address:"6101 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Jeopardy! host for 37 years"},
+  {name:"Alfred Hitchcock",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6506 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Master of Suspense director"},
+  {name:"Alice Cooper",cat:"music",emoji:"\ud83c\udfb5",year:1988,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"School's Out, No More Mr. Nice Guy, shock rock"},
+  {name:"Alicia Keys",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fallin', No One, piano pop-soul songwriter"},
+  {name:"Amos Milburn",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Chicken Shack Boogie, rhythm and blues pioneer"},
+  {name:"Amy Winehouse",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rehab, Back to Black, jazz-soul icon"},
+  {name:"Andy Griffith",cat:"tv",emoji:"\ud83d\udcfa",year:2000,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Andy Griffith Show's Sheriff Andy Taylor"},
+  {name:"Angela Bassett",cat:"film",emoji:"\ud83c\udfac",year:2021,address:"7083 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Black Panther and What's Love Got to Do with It"},
+  {name:"Angela Lansbury",cat:"tv",emoji:"\ud83d\udcfa",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Murder She Wrote's Jessica Fletcher"},
+  {name:"Angelina Jolie",cat:"film",emoji:"\ud83c\udfac",year:2011,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Lara Croft, Girl Interrupted, humanitarian"},
+  {name:"Ann-Margret",cat:"film",emoji:"\ud83c\udfac",year:1987,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bye Bye Birdie and Tommy actress-singer"},
+  {name:"Anne Baxter",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6525 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"All About Eve actress"},
+  {name:"Annette Funicello",cat:"film",emoji:"\ud83c\udfac",year:1993,address:"6280 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mouseketeer and Beach Party movies"},
+  {name:"Anthony Hopkins",cat:"film",emoji:"\ud83c\udfac",year:1993,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Silence of the Lambs, Nixon, The Father"},
+  {name:"Antonio Banderas",cat:"film",emoji:"\ud83c\udfac",year:2015,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Zorro, Desperado, Pain and Glory"},
+  {name:"Aretha Franklin",cat:"music",emoji:"\ud83c\udfb5",year:1979,address:"1749 Vine St",lat:34.1016,lng:-118.3370,note:"Respect, Think, Queen of Soul"},
+  {name:"Arsenio Hall",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"7020 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Arsenio Hall Show, Coming to America"},
+  {name:"Art Linkletter",cat:"radio",emoji:"\ud83d\udcfb",year:1960,address:"1637 Vine St",lat:34.1016,lng:-118.3370,note:"House Party, Kids Say the Darndest Things"},
+  {name:"Audra McDonald",cat:"theatre",emoji:"\ud83c\udfad",year:2015,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Six-time Tony Award winner, Broadway royalty"},
+  {name:"Audrey Hepburn",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6828 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Breakfast at Tiffany's, Roman Holiday"},
+  {name:"Backstreet Boys",cat:"music",emoji:"\ud83c\udfb5",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Want It That Way, Everybody, Quit Playing Games"},
+  {name:"Barbara Eden",cat:"tv",emoji:"\ud83d\udcfa",year:2005,address:"6201 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Dream of Jeannie star"},
+  {name:"Barbara Stanwyck",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1752 Vine St",lat:34.1016,lng:-118.3370,note:"Double Indemnity and Stella Dallas"},
+  {name:"Barbara Walters",cat:"tv",emoji:"\ud83d\udcfa",year:1980,address:"6250 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"20/20, The View, broadcast journalism legend"},
+  {name:"Barbra Streisand",cat:"film",emoji:"\ud83c\udfac",year:1976,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Funny Girl, A Star Is Born, Broadway legend"},
+  {name:"Barry Manilow",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mandy, I Write the Songs, Can't Smile Without You"},
+  {name:"Barry White",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Can't Get Enough of Your Love Babe, deep soul voice"},
+  {name:"Bea Arthur",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Golden Girls' Dorothy, Maude"},
+  {name:"Ben Affleck",cat:"film",emoji:"\ud83c\udfac",year:2019,address:"7018 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Good Will Hunting, Batman, Gone Girl"},
+  {name:"Ben E. King",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Stand by Me, Spanish Harlem, soul singer"},
+  {name:"Ben Kingsley",cat:"film",emoji:"\ud83c\udfac",year:2000,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gandhi Oscar winner"},
+  {name:"Bette Davis",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6225 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"All About Eve, What Ever Happened to Baby Jane?"},
+  {name:"Betty White",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Golden Girls' Rose, The Mary Tyler Moore Show"},
+  {name:"Beyonc\u00e9",cat:"music",emoji:"\ud83c\udfb5",year:2006,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Crazy in Love, Single Ladies, Lemonade, Renaissance"},
+  {name:"Bill Bixby",cat:"tv",emoji:"\ud83d\udcfa",year:1988,address:"6201 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Incredible Hulk, My Favorite Martian"},
+  {name:"Bill Cosby",cat:"live",emoji:"\ud83c\udfaa",year:1977,address:"6438 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Cosby Show, groundbreaking stand-up comedian"},
+  {name:"Billie Eilish",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bad Guy, Happier Than Ever, Gen Z icon"},
+  {name:"Billie Holiday",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6777 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Strange Fruit, God Bless the Child, Lady Day"},
+  {name:"Billy Joel",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Piano Man, Uptown Girl, We Didn't Start the Fire"},
+  {name:"Billy Wilder",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Some Like It Hot, Sunset Boulevard director"},
+  {name:"Bing Crosby",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1600 Vine St",lat:34.1016,lng:-118.3370,note:"White Christmas star, Road to... films"},
+  {name:"Bob Barker",cat:"tv",emoji:"\ud83d\udcfa",year:1976,address:"6225 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Price Is Right legendary host"},
+  {name:"Bob Dylan",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Blowin' in the Wind, Like a Rolling Stone, Nobel Prize"},
+  {name:"Bob Fosse",cat:"live",emoji:"\ud83c\udfaa",year:1976,address:"6501 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Cabaret, Chicago, All That Jazz choreographer"},
+  {name:"Bob Hope",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1625 Vine St",lat:34.1016,lng:-118.3370,note:"Road to... comedy, 60 years of USO shows"},
+  {name:"Bob Newhart",cat:"tv",emoji:"\ud83d\udcfa",year:1980,address:"6533 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Bob Newhart Show, Newhart, two TV legends"},
+  {name:"Bobby Darin",cat:"music",emoji:"\ud83c\udfb5",year:1982,address:"6336 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mack the Knife, Beyond the Sea, Splish Splash"},
+  {name:"Boyz II Men",cat:"music",emoji:"\ud83c\udfb5",year:2021,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"End of the Road, I'll Make Love to You"},
+  {name:"Brad Pitt",cat:"film",emoji:"\ud83c\udfac",year:2012,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fight Club, Once Upon a Time in Hollywood"},
+  {name:"Brenda Lee",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I'm Sorry, Rockin' Around the Christmas Tree"},
+  {name:"Brigitte Bardot",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"And God Created Woman, French film icon"},
+  {name:"Britney Spears",cat:"music",emoji:"\ud83c\udfb5",year:2019,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Baby One More Time, Toxic, Oops I Did It Again"},
+  {name:"Bruce Jenner",cat:"tv",emoji:"\ud83d\udcfa",year:2011,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Olympic gold medalist and reality TV star"},
+  {name:"Bruce Lee",cat:"film",emoji:"\ud83c\udfac",year:1993,address:"6933 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Enter the Dragon martial arts legend"},
+  {name:"Bruce Willis",cat:"film",emoji:"\ud83c\udfac",year:2006,address:"6264 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Die Hard, The Sixth Sense, Pulp Fiction"},
+  {name:"Bruno Mars",cat:"music",emoji:"\ud83c\udfb5",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Just the Way You Are, Uptown Funk, 24K Magic"},
+  {name:"Buddy Holly",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Peggy Sue, That'll Be the Day, rock trailblazer"},
+  {name:"Burns and Allen",cat:"radio",emoji:"\ud83d\udcfb",year:1960,address:"1611 Vine St",lat:34.1016,lng:-118.3370,note:"George Burns and Gracie Allen comedy duo"},
+  {name:"Burt Lancaster",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"From Here to Eternity, Elmer Gantry"},
+  {name:"Burt Reynolds",cat:"film",emoji:"\ud83c\udfac",year:1978,address:"6838 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Smokey and the Bandit, Boogie Nights"},
+  {name:"Burt Ward",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6501 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Batman's Robin the Boy Wonder"},
+  {name:"Cameron Diaz",cat:"film",emoji:"\ud83c\udfac",year:2009,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Mask, There's Something About Mary"},
+  {name:"Cardi B",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bodak Yellow, WAP, Invasion of Privacy"},
+  {name:"Carey Grant",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6301 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"North by Northwest, His Girl Friday"},
+  {name:"Carlos Santana",cat:"music",emoji:"\ud83c\udfb5",year:1996,address:"6233 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Smooth, Black Magic Woman, guitar icon"},
+  {name:"Carol Burnett",cat:"tv",emoji:"\ud83d\udcfa",year:1974,address:"6468 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Carol Burnett Show comedy-sketch legend"},
+  {name:"Carole King",cat:"music",emoji:"\ud83c\udfb5",year:1995,address:"1750 N Vine St",lat:34.1016,lng:-118.3370,note:"I Feel the Earth Move, Tapestry album legend"},
+  {name:"Carroll Baker",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6265 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Baby Doll and Giant actress"},
+  {name:"Carroll O'Connor",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6100 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"All in the Family's Archie Bunker"},
+  {name:"Cate Blanchett",cat:"film",emoji:"\ud83c\udfac",year:2008,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Lord of the Rings, Carol, T\u00e1r"},
+  {name:"Catherine Deneuve",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Belle de Jour, Repulsion, French cinema icon"},
+  {name:"Cecil B. DeMille",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Ten Commandments epic director"},
+  {name:"Celine Dion",cat:"music",emoji:"\ud83c\udfb5",year:2004,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"My Heart Will Go On, The Power of Love"},
+  {name:"Charles Aznavour",cat:"music",emoji:"\ud83c\udfb5",year:2009,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"She, La Boh\u00e8me, French chanson legend"},
+  {name:"Charlie Chaplin",cat:"film",emoji:"\ud83c\udfac",year:1972,address:"6751 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Tramp, Modern Times, City Lights"},
+  {name:"Charlize Theron",cat:"film",emoji:"\ud83c\udfac",year:2005,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Monster, Mad Max: Fury Road, Bombshell"},
+  {name:"Charlton Heston",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6724 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ben-Hur, The Ten Commandments"},
+  {name:"Chris Evans",cat:"film",emoji:"\ud83c\udfac",year:2014,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Captain America, Avengers, Knives Out"},
+  {name:"Chris Hemsworth",cat:"film",emoji:"\ud83c\udfac",year:2024,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Thor, Avengers, Extraction"},
+  {name:"Chris Pratt",cat:"film",emoji:"\ud83c\udfac",year:2017,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Guardians of the Galaxy, Jurassic World"},
+  {name:"Christina Aguilera",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Genie in a Bottle, Beautiful, Fighter"},
+  {name:"Christopher Reeve",cat:"film",emoji:"\ud83c\udfac",year:1987,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Original Superman actor"},
+  {name:"Chuck Berry",cat:"music",emoji:"\ud83c\udfb5",year:1987,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Johnny B. Goode, Maybellene, rock and roll pioneer"},
+  {name:"Cirque du Soleil",cat:"live",emoji:"\ud83c\udfaa",year:2016,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Revolutionary acrobatic performance troupe"},
+  {name:"Clark Gable",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1708 Vine St",lat:34.1016,lng:-118.3370,note:"Gone with the Wind, It Happened One Night"},
+  {name:"Claudette Colbert",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6263 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"It Happened One Night Oscar winner"},
+  {name:"Clayton Moore",cat:"tv",emoji:"\ud83d\udcfa",year:1987,address:"6638 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Lone Ranger, Hi-Yo Silver!"},
+  {name:"Clint Eastwood",cat:"film",emoji:"\ud83c\udfac",year:1984,address:"6767 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dirty Harry, Unforgiven, The Good the Bad and the Ugly"},
+  {name:"Colin Firth",cat:"film",emoji:"\ud83c\udfac",year:2011,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The King's Speech Best Actor Oscar"},
+  {name:"Conan O'Brien",cat:"tv",emoji:"\ud83d\udcfa",year:2000,address:"6100 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Late Night with Conan O'Brien, Team Coco"},
+  {name:"Count Basie",cat:"music",emoji:"\ud83c\udfb5",year:1982,address:"1749 Vine St",lat:34.1016,lng:-118.3370,note:"Swing Era bandleader and jazz piano master"},
+  {name:"Curtis Mayfield",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Superfly, People Get Ready, soul-funk master"},
+  {name:"Dan Blocker",cat:"tv",emoji:"\ud83d\udcfa",year:1975,address:"6290 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bonanza's Hoss Cartwright"},
+  {name:"David Bowie",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"6400 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ziggy Stardust, Heroes, Let's Dance"},
+  {name:"David Copperfield",cat:"live",emoji:"\ud83c\udfaa",year:1995,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Greatest illusionist of all time"},
+  {name:"David Hasselhoff",cat:"tv",emoji:"\ud83d\udcfa",year:1996,address:"6250 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Baywatch, Knight Rider's Michael Knight"},
+  {name:"David Letterman",cat:"tv",emoji:"\ud83d\udcfa",year:2002,address:"7001 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Late Night and Late Show host legend"},
+  {name:"Dean Martin",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1635 Vine St",lat:34.1016,lng:-118.3370,note:"That's Amore, Everybody Loves Somebody, Rat Pack"},
+  {name:"Del Shannon",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Runaway, Hats Off to Larry"},
+  {name:"Demi Moore",cat:"film",emoji:"\ud83c\udfac",year:1991,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ghost, G.I. Jane, Striptease"},
+  {name:"Denzel Washington",cat:"film",emoji:"\ud83c\udfac",year:1998,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Training Day, Malcolm X, two Oscar wins"},
+  {name:"Destiny's Child",cat:"music",emoji:"\ud83c\udfb5",year:2021,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Say My Name, Survivor, Bootylicious"},
+  {name:"Diana Ross",cat:"music",emoji:"\ud83c\udfb5",year:1982,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ain't No Mountain High Enough, Endless Love"},
+  {name:"Diane Keaton",cat:"film",emoji:"\ud83c\udfac",year:2001,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Annie Hall, The Godfather, Something's Gotta Give"},
+  {name:"Dick Clark",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1607 Vine St",lat:34.1016,lng:-118.3370,note:"American Bandstand, New Year's Rockin' Eve"},
+  {name:"Dick Van Dyke",cat:"tv",emoji:"\ud83d\udcfa",year:1993,address:"6656 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Dick Van Dyke Show, Mary Poppins"},
+  {name:"Dinah Shore",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1613 Vine St",lat:34.1016,lng:-118.3370,note:"Whatever Will Be Will Be, pop and TV star"},
+  {name:"Dizzy Gillespie",cat:"music",emoji:"\ud83c\udfb5",year:1993,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bebop jazz trumpet pioneer"},
+  {name:"Dolly Parton",cat:"music",emoji:"\ud83c\udfb5",year:1984,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Jolene, I Will Always Love You, country icon"},
+  {name:"Don Knotts",cat:"tv",emoji:"\ud83d\udcfa",year:2000,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Andy Griffith Show's Barney Fife, Three's Company"},
+  {name:"Donna Reed",cat:"tv",emoji:"\ud83d\udcfa",year:1984,address:"6245 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Donna Reed Show, 1950s TV mom"},
+  {name:"Donna Summer",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hot Stuff, Last Dance, Queen of Disco"},
+  {name:"Doris Day",cat:"film",emoji:"\ud83c\udfac",year:1977,address:"6264 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Calamity Jane, Pillow Talk, singer-actress"},
+  {name:"Douglas Fairbanks",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6374 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Mark of Zorro silent film swashbuckler"},
+  {name:"Dr. Dre",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Chronic, Nuthin' But a G Thang, hip-hop producer"},
+  {name:"Drake",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"God's Plan, Hotline Bling, In My Feelings"},
+  {name:"Drew Barrymore",cat:"film",emoji:"\ud83c\udfac",year:2004,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"E.T., Charlie's Angels, Never Been Kissed"},
+  {name:"Dua Lipa",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Levitating, Don't Start Now, Future Nostalgia"},
+  {name:"Duke Ellington",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1637 Vine St",lat:34.1016,lng:-118.3370,note:"Take the A Train, Mood Indigo, jazz maestro"},
+  {name:"Dustin Hoffman",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Graduate, Tootsie, Rain Man"},
+  {name:"Eagles",cat:"music",emoji:"\ud83c\udfb5",year:1998,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hotel California, Take It Easy, Desperado"},
+  {name:"Earth Wind and Fire",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"September, Shining Star, Boogie Wonderland"},
+  {name:"Ed Sheeran",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Shape of You, Thinking Out Loud, Bad Habits"},
+  {name:"Ed Sullivan",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1700 Vine St",lat:34.1016,lng:-118.3370,note:"The Ed Sullivan Show, launched the Beatles in America"},
+  {name:"Eddie Murphy",cat:"film",emoji:"\ud83c\udfac",year:2012,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Beverly Hills Cop, Coming to America, 48 Hrs."},
+  {name:"Edgar Bergen",cat:"radio",emoji:"\ud83d\udcfb",year:1960,address:"1651 Vine St",lat:34.1016,lng:-118.3370,note:"Charlie McCarthy ventriloquist radio star"},
+  {name:"Elia Kazan",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"On the Waterfront, A Streetcar Named Desire director"},
+  {name:"Elizabeth Montgomery",cat:"tv",emoji:"\ud83d\udcfa",year:1993,address:"6236 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bewitched's Samantha Stephens"},
+  {name:"Elizabeth Taylor",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6336 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Cleopatra, Who's Afraid of Virginia Woolf, National Velvet"},
+  {name:"Ella Fitzgerald",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"First Lady of Song, A-Tisket A-Tasket, vocal legend"},
+  {name:"Ellen DeGeneres",cat:"tv",emoji:"\ud83d\udcfa",year:2012,address:"6834 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Ellen DeGeneres Show, comedian"},
+  {name:"Elton John",cat:"music",emoji:"\ud83c\udfb5",year:1975,address:"6915 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rocket Man, Tiny Dancer, Crocodile Rock"},
+  {name:"Elvis Presley",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6777 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hound Dog, Love Me Tender, King of Rock and Roll"},
+  {name:"Eminem",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Lose Yourself, Slim Shady, The Marshall Mathers LP"},
+  {name:"Enrique Iglesias",cat:"music",emoji:"\ud83c\udfb5",year:2002,address:"6912 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hero, Bailamos, Be With You"},
+  {name:"Eric Clapton",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Layla, Tears in Heaven, Slowhand guitar icon"},
+  {name:"Errol Flynn",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6638 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Adventures of Robin Hood swashbuckler"},
+  {name:"Estelle Getty",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Golden Girls' Sophia Petrillo"},
+  {name:"Ethel Merman",cat:"theatre",emoji:"\ud83c\udfad",year:1960,address:"1600 Vine St",lat:34.1016,lng:-118.3370,note:"Everything's Coming Up Roses, Broadway belter"},
+  {name:"Eva Gardner",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6264 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mogambo and The Barefoot Contessa"},
+  {name:"Faye Dunaway",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bonnie and Clyde, Chinatown, Network"},
+  {name:"Fibber McGee and Molly",cat:"radio",emoji:"\ud83d\udcfb",year:1960,address:"1651 Vine St",lat:34.1016,lng:-118.3370,note:"Classic 1930s-50s radio comedy duo"},
+  {name:"Fleetwood Mac",cat:"music",emoji:"\ud83c\udfb5",year:1998,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Go Your Own Way, Dreams, The Chain"},
+  {name:"Flip Wilson",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6100 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Flip Wilson Show, Geraldine comedian"},
+  {name:"Frances McDormand",cat:"film",emoji:"\ud83c\udfac",year:2018,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fargo, Three Billboards, Nomadland"},
+  {name:"Frank Capra",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"It's a Wonderful Life, Mr. Smith Goes to Washington"},
+  {name:"Frank Sinatra",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1600 N Vine St",lat:34.1016,lng:-118.3370,note:"From Here to Eternity Oscar winner"},
+  {name:"Frankie Valli",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Can't Take My Eyes Off You, Sherry, Big Girls Don't Cry"},
+  {name:"Fred Astaire",cat:"live",emoji:"\ud83c\udfaa",year:1960,address:"6317 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Top Hat, Swing Time, song-and-dance legend"},
+  {name:"Fred Gwynne",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6264 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Munsters' Herman Munster"},
+  {name:"Gary Cooper",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6243 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"High Noon, Sergeant York, Mr. Deeds Goes to Town"},
+  {name:"Gene Hackman",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The French Connection, Unforgiven, The Royal Tenenbaums"},
+  {name:"Gene Kelly",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6764 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Singin' in the Rain choreographer and star"},
+  {name:"Gene Roddenberry",cat:"tv",emoji:"\ud83d\udcfa",year:1985,address:"1641 Vine St",lat:34.1016,lng:-118.3370,note:"Star Trek creator, sci-fi visionary"},
+  {name:"Gene Wilder",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Willy Wonka, Young Frankenstein, Blazing Saddles"},
+  {name:"George Burns",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1611 Vine St",lat:34.1016,lng:-118.3370,note:"Burns and Allen Show, Oh God!"},
+  {name:"George Carlin",cat:"live",emoji:"\ud83c\udfaa",year:2014,address:"6427 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Seven Words, Class Clown, groundbreaking stand-up"},
+  {name:"George Jones",cat:"music",emoji:"\ud83c\udfb5",year:1995,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"He Stopped Loving Her Today, country legend"},
+  {name:"George Lucas",cat:"film",emoji:"\ud83c\udfac",year:1992,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Star Wars and Indiana Jones creator"},
+  {name:"Ginger Rogers",cat:"live",emoji:"\ud83c\udfaa",year:1960,address:"6772 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Shall We Dance? Fred Astaire's iconic partner"},
+  {name:"Glen Campbell",cat:"music",emoji:"\ud83c\udfb5",year:1981,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rhinestone Cowboy, Wichita Lineman, Galveston"},
+  {name:"Glenn Close",cat:"film",emoji:"\ud83c\udfac",year:1992,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fatal Attraction, Dangerous Liaisons, The Wife"},
+  {name:"Gloria Estefan",cat:"music",emoji:"\ud83c\udfb5",year:1993,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rhythm Is Gonna Get You, Miami Sound Machine"},
+  {name:"Gloria Gaynor",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Will Survive disco anthem"},
+  {name:"Goldie Hawn",cat:"film",emoji:"\ud83c\udfac",year:1991,address:"6368 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Private Benjamin, Overboard, Cactus Flower"},
+  {name:"Grace Kelly",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rear Window, To Catch a Thief, Princess of Monaco"},
+  {name:"Greer Garson",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mrs. Miniver Oscar winner"},
+  {name:"Gregory Peck",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6100 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"To Kill a Mockingbird's Atticus Finch"},
+  {name:"Greta Garbo",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ninotchka, Grand Hotel, reclusive legend"},
+  {name:"Halle Berry",cat:"film",emoji:"\ud83c\udfac",year:2007,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"First Black woman Best Actress Oscar winner"},
+  {name:"Hank Williams",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Your Cheatin' Heart, Hey Good Lookin', country pioneer"},
+  {name:"Harrison Ford",cat:"film",emoji:"\ud83c\udfac",year:2003,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Indiana Jones, Han Solo, Jack Ryan"},
+  {name:"Harry Houdini",cat:"live",emoji:"\ud83c\udfaa",year:1960,address:"6601 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"World's greatest escape artist and magician"},
+  {name:"Harry Styles",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Watermelon Sugar, As It Was, One Direction star"},
+  {name:"Harvey Korman",cat:"tv",emoji:"\ud83d\udcfa",year:2000,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Blazing Saddles, The Carol Burnett Show"},
+  {name:"Hedy Lamarr",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6247 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Algiers actress and frequency-hopping inventor"},
+  {name:"Helen Hayes",cat:"theatre",emoji:"\ud83c\udfad",year:1960,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"First Lady of American Theatre"},
+  {name:"Henry Fonda",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6126 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"12 Angry Men, The Grapes of Wrath, On Golden Pond"},
+  {name:"Henry Winkler",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6628 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Happy Days' the Fonz, Arrested Development"},
+  {name:"Herb Alpert",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"A Taste of Honey, Tijuana Brass bandleader"},
+  {name:"Howard Hawks",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bringing Up Baby, His Girl Friday director"},
+  {name:"Hugh Grant",cat:"film",emoji:"\ud83c\udfac",year:2000,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Four Weddings and a Funeral, Notting Hill"},
+  {name:"Humphrey Bogart",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6322 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Casablanca, The Maltese Falcon, The African Queen"},
+  {name:"Ingrid Bergman",cat:"film",emoji:"\ud83c\udfac",year:1977,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Casablanca, Notorious, three Oscars"},
+  {name:"Isaac Hayes",cat:"music",emoji:"\ud83c\udfb5",year:1999,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Shaft theme, Hold On I'm Comin', Hot Buttered Soul"},
+  {name:"Isabelle Huppert",cat:"film",emoji:"\ud83c\udfac",year:2024,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Piano Teacher, Elle, French cinema icon"},
+  {name:"Jack Benny",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1611 Vine St",lat:34.1016,lng:-118.3370,note:"The Jack Benny Program radio and TV comedy legend"},
+  {name:"Jack Lemmon",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Some Like It Hot, The Odd Couple, two Oscars"},
+  {name:"Jack Nicholson",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Shining, One Flew Over the Cuckoo's Nest, Chinatown"},
+  {name:"Jack Paar",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1611 Vine St",lat:34.1016,lng:-118.3370,note:"The Tonight Show original host"},
+  {name:"Jackie Chan",cat:"film",emoji:"\ud83c\udfac",year:2002,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rush Hour, Police Story, martial arts star"},
+  {name:"Jackie Wilson",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Reet Petite, Higher and Higher, soul icon"},
+  {name:"James Arness",cat:"tv",emoji:"\ud83d\udcfa",year:1974,address:"6279 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gunsmoke's Marshal Matt Dillon"},
+  {name:"James Brown",cat:"music",emoji:"\ud83c\udfb5",year:1976,address:"6633 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Feel Good, Papa's Got a Brand New Bag, Godfather of Soul"},
+  {name:"James Cagney",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1701 Vine St",lat:34.1016,lng:-118.3370,note:"White Heat, Yankee Doodle Dandy, Angels with Dirty Faces"},
+  {name:"James Dean",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1719 Vine St",lat:34.1016,lng:-118.3370,note:"Rebel Without a Cause, East of Eden, Giant"},
+  {name:"James Garner",cat:"film",emoji:"\ud83c\udfac",year:1993,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Great Escape, Victor Victoria"},
+  {name:"James Stewart",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1708 Vine St",lat:34.1016,lng:-118.3370,note:"It's a Wonderful Life, Rear Window, Vertigo"},
+  {name:"James Taylor",cat:"music",emoji:"\ud83c\udfb5",year:2000,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"You've Got a Friend, Fire and Rain, Carolina in My Mind"},
+  {name:"Jane Fonda",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Klute, Coming Home, 9 to 5"},
+  {name:"Janet Jackson",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Control, Rhythm Nation, Nasty, Together Again"},
+  {name:"Jay Leno",cat:"tv",emoji:"\ud83d\udcfa",year:1988,address:"6777 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Tonight Show with Jay Leno host"},
+  {name:"Jay-Z",cat:"music",emoji:"\ud83c\udfb5",year:2019,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"99 Problems, Empire State of Mind, rapper-mogul"},
+  {name:"Jeff Bridges",cat:"film",emoji:"\ud83c\udfac",year:2003,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Big Lebowski, Crazy Heart, True Grit"},
+  {name:"Jennifer Lopez",cat:"music",emoji:"\ud83c\udfb5",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"If You Had My Love, Jenny from the Block, On the Floor"},
+  {name:"Jerry Lee Lewis",cat:"music",emoji:"\ud83c\udfb5",year:1989,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Great Balls of Fire, Whole Lotta Shakin' Goin' On"},
+  {name:"Jerry Seinfeld",cat:"tv",emoji:"\ud83d\udcfa",year:2002,address:"6100 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Seinfeld co-creator and star"},
+  {name:"Jerry Springer",cat:"tv",emoji:"\ud83d\udcfa",year:2015,address:"6101 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Jerry Springer Show tabloid talk host"},
+  {name:"Jessica Lange",cat:"film",emoji:"\ud83c\udfac",year:1995,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Tootsie, Blue Sky, American Horror Story"},
+  {name:"Jim Carrey",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Mask, Ace Ventura, The Truman Show"},
+  {name:"Jim Morrison",cat:"music",emoji:"\ud83c\udfb5",year:1993,address:"1749 Vine St",lat:34.1016,lng:-118.3370,note:"Light My Fire, The Doors frontman"},
+  {name:"Jimi Hendrix",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6627 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Purple Haze, All Along the Watchtower, guitar god"},
+  {name:"Joan Baez",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Diamonds and Rust, folk music legend"},
+  {name:"Joan Crawford",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6025 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mildred Pierce, Whatever Happened to Baby Jane?"},
+  {name:"Joan Fontaine",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1705 Vine St",lat:34.1016,lng:-118.3370,note:"Rebecca and Suspicion Oscar winner"},
+  {name:"Joan Rivers",cat:"tv",emoji:"\ud83d\udcfa",year:1989,address:"6429 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Can we talk? comedian and The Tonight Show"},
+  {name:"Jodie Foster",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Silence of the Lambs, Taxi Driver, Panic Room"},
+  {name:"John Denver",cat:"music",emoji:"\ud83c\udfb5",year:2014,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rocky Mountain High, Take Me Home Country Roads"},
+  {name:"John Ford",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6430 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Stagecoach, The Searchers, Grapes of Wrath director"},
+  {name:"John Huston",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6706 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Maltese Falcon, The African Queen director"},
+  {name:"John Travolta",cat:"film",emoji:"\ud83c\udfac",year:1985,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Saturday Night Fever, Grease, Pulp Fiction"},
+  {name:"John Wayne",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1541 Vine St",lat:34.1016,lng:-118.3370,note:"True Grit, Stagecoach, The Quiet Man"},
+  {name:"Johnny Carson",cat:"tv",emoji:"\ud83d\udcfa",year:1987,address:"6279 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Tonight Show host for 30 years"},
+  {name:"Johnny Cash",cat:"music",emoji:"\ud83c\udfb5",year:1976,address:"1717 N Vine St",lat:34.1016,lng:-118.3370,note:"Ring of Fire, Folsom Prison Blues, Man in Black"},
+  {name:"Johnny Depp",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"7020 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Pirates of the Caribbean, Edward Scissorhands, Fear and Loathing"},
+  {name:"Judy Garland",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6764 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Wizard of Oz, A Star Is Born, Meet Me in St. Louis"},
+  {name:"Julia Roberts",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Pretty Woman, Erin Brockovich, Ocean's Eleven"},
+  {name:"Julie Andrews",cat:"film",emoji:"\ud83c\udfac",year:1991,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mary Poppins, The Sound of Music, Victor Victoria"},
+  {name:"Julio Iglesias",cat:"music",emoji:"\ud83c\udfb5",year:1985,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"To All the Girls I've Loved Before, romantic balladeer"},
+  {name:"Kanye West",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gold Digger, All Falls Down, The College Dropout"},
+  {name:"Kate Winslet",cat:"film",emoji:"\ud83c\udfac",year:2014,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Titanic, Eternal Sunshine of the Spotless Mind, The Reader"},
+  {name:"Katharine Hepburn",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Four-time Oscar winner, The African Queen"},
+  {name:"Katy Perry",cat:"music",emoji:"\ud83c\udfb5",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Roar, Firework, California Gurls, Dark Horse"},
+  {name:"Keanu Reeves",cat:"film",emoji:"\ud83c\udfac",year:2023,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Matrix's Neo and John Wick"},
+  {name:"Kelly Ripa",cat:"tv",emoji:"\ud83d\udcfa",year:2015,address:"6201 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Live with Kelly, All My Children actress"},
+  {name:"Kelsey Grammer",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Frasier and Cheers sitcom legend"},
+  {name:"Kenny Rogers",cat:"music",emoji:"\ud83c\udfb5",year:1986,address:"6849 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Gambler, Islands in the Stream, Lucille"},
+  {name:"Kevin Costner",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"6912 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dances with Wolves, The Bodyguard, Field of Dreams"},
+  {name:"Kim Kardashian",cat:"tv",emoji:"\ud83d\udcfa",year:2022,address:"6715 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Keeping Up with the Kardashians, mogul"},
+  {name:"Kim Novak",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6336 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Vertigo, Picnic, Bell Book and Candle"},
+  {name:"Kirk Douglas",cat:"film",emoji:"\ud83c\udfac",year:1992,address:"6263 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Spartacus, Champion, Paths of Glory"},
+  {name:"Kool and the Gang",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Celebration, Get Down on It, Jungle Boogie"},
+  {name:"Lady Gaga",cat:"music",emoji:"\ud83c\udfb5",year:2019,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bad Romance, Poker Face, Born This Way"},
+  {name:"Lana Turner",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Postman Always Rings Twice actress"},
+  {name:"Larry Hagman",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dallas's J.R. Ewing, I Dream of Jeannie"},
+  {name:"Larry King",cat:"radio",emoji:"\ud83d\udcfb",year:1997,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Larry King Live, CNN interview legend"},
+  {name:"Lawrence Olivier",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hamlet, Rebecca, Shakespearean master"},
+  {name:"Led Zeppelin",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Stairway to Heaven, Whole Lotta Love, rock royalty"},
+  {name:"Lena Horne",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6247 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Stormy Weather, singer, actress, and civil rights activist"},
+  {name:"Leonard Nimoy",cat:"tv",emoji:"\ud83d\udcfa",year:1985,address:"1642 Vine St",lat:34.1016,lng:-118.3370,note:"Star Trek's Mr. Spock, Live Long and Prosper"},
+  {name:"Leonardo DiCaprio",cat:"film",emoji:"\ud83c\udfac",year:2022,address:"6931 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Titanic, The Revenant Oscar winner"},
+  {name:"Lesley Gore",cat:"music",emoji:"\ud83c\udfb5",year:2015,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"It's My Party, You Don't Own Me"},
+  {name:"Liam Neeson",cat:"film",emoji:"\ud83c\udfac",year:2013,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Schindler's List, Taken, Michael Collins"},
+  {name:"Liberace",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1356 Vine St",lat:34.1016,lng:-118.3370,note:"Flamboyant piano showman, Las Vegas legend"},
+  {name:"Lillian Gish",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6388 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Birth of a Nation, Way Down East, silent film pioneer"},
+  {name:"Linda Ronstadt",cat:"music",emoji:"\ud83c\udfb5",year:2011,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"You're No Good, Blue Bayou, Different Drum"},
+  {name:"Lionel Richie",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"All Night Long, Hello, We Are the World co-writer"},
+  {name:"Little Richard",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Tutti Frutti, Good Golly Miss Molly, rock pioneer"},
+  {name:"Loretta Lynn",cat:"music",emoji:"\ud83c\udfb5",year:2011,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Coal Miner's Daughter, country music trailblazer"},
+  {name:"Loretta Young",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6834 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Farmer's Daughter Oscar winner"},
+  {name:"Lorne Greene",cat:"tv",emoji:"\ud83d\udcfa",year:1979,address:"6280 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bonanza's Ben Cartwright patriarch"},
+  {name:"Louis Armstrong",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"What a Wonderful World, jazz trumpet legend"},
+  {name:"Lucille Ball",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6436 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Love Lucy, TV pioneer, comedian"},
+  {name:"Luther Vandross",cat:"music",emoji:"\ud83c\udfb5",year:2003,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Here and Now, Never Too Much R&B legend"},
+  {name:"MC Hammer",cat:"music",emoji:"\ud83c\udfb5",year:2012,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"U Can't Touch This, 2 Legit 2 Quit"},
+  {name:"Madonna",cat:"music",emoji:"\ud83c\udfb5",year:2008,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Like a Virgin, Material Girl, Queen of Pop"},
+  {name:"Mae West",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6100 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"She Done Him Wrong, I'm No Angel, sex symbol"},
+  {name:"Mahalia Jackson",cat:"music",emoji:"\ud83c\udfb5",year:1988,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Greatest gospel singer of all time"},
+  {name:"Marc Anthony",cat:"music",emoji:"\ud83c\udfb5",year:2002,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Need to Know, You Sang to Me, salsa legend"},
+  {name:"Mariah Carey",cat:"music",emoji:"\ud83c\udfb5",year:2015,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"All I Want for Christmas Is You, Hero, whistle-note icon"},
+  {name:"Marilyn Monroe",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6774 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Some Like It Hot, Gentlemen Prefer Blondes, Bus Stop"},
+  {name:"Marlon Brando",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"1765 Vine St",lat:34.1016,lng:-118.3370,note:"The Godfather, A Streetcar Named Desire, Apocalypse Now"},
+  {name:"Martin Scorsese",cat:"film",emoji:"\ud83c\udfac",year:2012,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Goodfellas, Taxi Driver, The Departed"},
+  {name:"Marvin Gaye",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"1627 Vine St",lat:34.1016,lng:-118.3370,note:"What's Going On, Let's Get It On, soul icon"},
+  {name:"Mary J. Blige",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"No More Drama, Real Love, Queen of Hip-Hop Soul"},
+  {name:"Mary Martin",cat:"theatre",emoji:"\ud83c\udfad",year:1960,address:"1645 Vine St",lat:34.1016,lng:-118.3370,note:"South Pacific and Peter Pan Broadway legend"},
+  {name:"Mary Pickford",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6301 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"America's Sweetheart, silent film pioneer"},
+  {name:"Mary Tyler Moore",cat:"tv",emoji:"\ud83d\udcfa",year:1996,address:"6333 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Mary Tyler Moore Show, Dick Van Dyke Show"},
+  {name:"Matt Damon",cat:"film",emoji:"\ud83c\udfac",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Good Will Hunting, The Martian, Saving Private Ryan"},
+  {name:"Maury Povich",cat:"tv",emoji:"\ud83d\udcfa",year:2018,address:"6200 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Maury, The Maury Povich Show talk host"},
+  {name:"Meg Ryan",cat:"film",emoji:"\ud83c\udfac",year:2000,address:"6925 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"When Harry Met Sally, Sleepless in Seattle"},
+  {name:"Mel Gibson",cat:"film",emoji:"\ud83c\udfac",year:1984,address:"6140 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Lethal Weapon, Braveheart actor-director"},
+  {name:"Mel Torm\u00e9",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"6261 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Velvet Fog, The Christmas Song"},
+  {name:"Merle Haggard",cat:"music",emoji:"\ud83c\udfb5",year:1996,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Mama Tried, Okie From Muskogee, country outlaw"},
+  {name:"Merv Griffin",cat:"tv",emoji:"\ud83d\udcfa",year:1970,address:"1541 Vine St",lat:34.1016,lng:-118.3370,note:"The Merv Griffin Show, Jeopardy! creator"},
+  {name:"Meryl Streep",cat:"film",emoji:"\ud83c\udfac",year:2004,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Most Oscar nominations in history, Sophie's Choice"},
+  {name:"Michael Caine",cat:"film",emoji:"\ud83c\udfac",year:1998,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Alfie, The Italian Job, The Dark Knight"},
+  {name:"Michael Douglas",cat:"film",emoji:"\ud83c\udfac",year:2017,address:"7018 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Wall Street, Basic Instinct, Falling Down"},
+  {name:"Michael J. Fox",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Back to the Future's Marty McFly"},
+  {name:"Michael Jackson",cat:"music",emoji:"\ud83c\udfb5",year:1984,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Thriller, Beat It, Billie Jean, King of Pop"},
+  {name:"Michael Landon",cat:"tv",emoji:"\ud83d\udcfa",year:1984,address:"1500 Vine St",lat:34.1016,lng:-118.3370,note:"Little House on the Prairie, Bonanza, Highway to Heaven"},
+  {name:"Michelle Pfeiffer",cat:"film",emoji:"\ud83c\udfac",year:2007,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Scarface, Batman Returns, The Fabulous Baker Boys"},
+  {name:"Mick Jagger",cat:"music",emoji:"\ud83c\udfb5",year:1989,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rolling Stones frontman, Satisfaction, Jumpin' Jack Flash"},
+  {name:"Mickey Rooney",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6260 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Andy Hardy series, Babes in Arms, Baby Face Nelson"},
+  {name:"Mikhail Baryshnikov",cat:"live",emoji:"\ud83c\udfaa",year:2016,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Greatest ballet dancer of the 20th century"},
+  {name:"Milton Berle",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1717 Vine St",lat:34.1016,lng:-118.3370,note:"Mr. Television, first TV superstar"},
+  {name:"Missy Elliott",cat:"music",emoji:"\ud83c\udfb5",year:2021,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Get Ur Freak On, Work It, female rap pioneer"},
+  {name:"Montel Williams",cat:"tv",emoji:"\ud83d\udcfa",year:2010,address:"6270 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Montel Williams Show, motivational host"},
+  {name:"N.W.A",cat:"music",emoji:"\ud83c\udfb5",year:2015,address:"6931 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Straight Outta Compton, Gangsta Gangsta, rap originators"},
+  {name:"NSYNC",cat:"music",emoji:"\ud83c\udfb5",year:2018,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bye Bye Bye, Tearin' Up My Heart, boy band"},
+  {name:"Nat King Cole",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1724 Vine St",lat:34.1016,lng:-118.3370,note:"Unforgettable, Mona Lisa, jazz and pop icon"},
+  {name:"Natalie Portman",cat:"film",emoji:"\ud83c\udfac",year:2015,address:"6931 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Black Swan, V for Vendetta, Jackie"},
+  {name:"Neil Diamond",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Sweet Caroline, Cherry Cherry, Solitary Man"},
+  {name:"Neil Sedaka",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Oh! Carol, Laughter in the Rain, Breaking Up Is Hard to Do"},
+  {name:"New Edition",cat:"music",emoji:"\ud83c\udfb5",year:2021,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Candy Girl, Mr. Telephone Man, R&B group"},
+  {name:"New Kids on the Block",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hanging Tough, Step by Step, boy band"},
+  {name:"Nicki Minaj",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Super Bass, Anaconda, Starships"},
+  {name:"Nicole Kidman",cat:"film",emoji:"\ud83c\udfac",year:2003,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Moulin Rouge!, The Hours, Eyes Wide Shut"},
+  {name:"Norman Lear",cat:"tv",emoji:"\ud83d\udcfa",year:2010,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"All in the Family, Good Times, Maude creator"},
+  {name:"Olivia Rodrigo",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Drivers License, Good 4 U, SOUR"},
+  {name:"Olivia de Havilland",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gone with the Wind, The Heiress"},
+  {name:"Omar Sharif",cat:"film",emoji:"\ud83c\udfac",year:1974,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Doctor Zhivago, Lawrence of Arabia"},
+  {name:"Oprah Winfrey",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6269 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Oprah Winfrey Show, media mogul"},
+  {name:"Orson Welles",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6533 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Citizen Kane director and star"},
+  {name:"Ozzie and Harriet Nelson",cat:"radio",emoji:"\ud83d\udcfb",year:1960,address:"1635 Vine St",lat:34.1016,lng:-118.3370,note:"The Adventures of Ozzie and Harriet"},
+  {name:"Ozzy Osbourne",cat:"music",emoji:"\ud83c\udfb5",year:2002,address:"6920 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Crazy Train, Prince of Darkness, Black Sabbath"},
+  {name:"Pamela Anderson",cat:"tv",emoji:"\ud83d\udcfa",year:2018,address:"6250 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Baywatch's C.J. Parker, pop culture icon"},
+  {name:"Parliament-Funkadelic",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"One Nation Under a Groove, funk collective"},
+  {name:"Pat Sajak",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6560 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Wheel of Fortune host since 1981"},
+  {name:"Patrick Stewart",cat:"tv",emoji:"\ud83d\udcfa",year:1996,address:"7021 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Star Trek TNG's Captain Picard, Professor X"},
+  {name:"Patsy Cline",cat:"music",emoji:"\ud83c\udfb5",year:1999,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Crazy, I Fall to Pieces, Walkin' After Midnight"},
+  {name:"Patti Page",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6401 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"How Much Is That Doggie in the Window, Tennessee Waltz"},
+  {name:"Paul Anka",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Diana, Lonely Boy, My Way songwriter"},
+  {name:"Paul Newman",cat:"film",emoji:"\ud83c\udfac",year:1969,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Hustler, Cool Hand Luke, Butch Cassidy"},
+  {name:"Paul Simon",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Sound of Silence, Mrs. Robinson, Graceland"},
+  {name:"Penelope Cruz",cat:"film",emoji:"\ud83c\udfac",year:2011,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"First Spanish Best Actress Oscar winner"},
+  {name:"Penn and Teller",cat:"live",emoji:"\ud83c\udfaa",year:2013,address:"6743 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fool Us, Las Vegas magic duo"},
+  {name:"Perry Como",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"1600 Vine St",lat:34.1016,lng:-118.3370,note:"Catch a Falling Star, Till the End of Time"},
+  {name:"Peter Falk",cat:"tv",emoji:"\ud83d\udcfa",year:1996,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Columbo's rumpled detective"},
+  {name:"Peter Fonda",cat:"film",emoji:"\ud83c\udfac",year:2000,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Easy Rider actor and filmmaker"},
+  {name:"Peter O'Toole",cat:"film",emoji:"\ud83c\udfac",year:1976,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Lawrence of Arabia, Becket, The Lion in Winter"},
+  {name:"Peter Sellers",cat:"film",emoji:"\ud83c\udfac",year:1976,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dr. Strangelove, Pink Panther's Clouseau"},
+  {name:"Petula Clark",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Downtown, Don't Sleep in the Subway, British pop"},
+  {name:"Phil Donahue",cat:"tv",emoji:"\ud83d\udcfa",year:1980,address:"1635 Vine St",lat:34.1016,lng:-118.3370,note:"The Phil Donahue Show, daytime TV pioneer"},
+  {name:"Pink",cat:"music",emoji:"\ud83c\udfb5",year:2019,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Just Give Me a Reason, Get the Party Started, Try"},
+  {name:"Post Malone",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Circles, Rockstar, Sunflower"},
+  {name:"Prince",cat:"music",emoji:"\ud83c\udfb5",year:1985,address:"6753 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Purple Rain, When Doves Cry, Kiss"},
+  {name:"Public Enemy",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fight the Power, Don't Believe the Hype"},
+  {name:"Raquel Welch",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"One Million Years B.C., 100 Rifles"},
+  {name:"Raymond Burr",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1600 Vine St",lat:34.1016,lng:-118.3370,note:"Perry Mason's attorney, Ironside"},
+  {name:"Red Skelton",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1708 Vine St",lat:34.1016,lng:-118.3370,note:"The Red Skelton Show, beloved comedian"},
+  {name:"Reese Witherspoon",cat:"film",emoji:"\ud83c\udfac",year:2010,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Legally Blonde, Walk the Line, Wild"},
+  {name:"Regis Philbin",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6101 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Live with Regis, Who Wants to Be a Millionaire"},
+  {name:"Rex Harrison",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"My Fair Lady, Doctor Dolittle"},
+  {name:"Richard Burton",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Who's Afraid of Virginia Woolf?, Hamlet, Cleopatra"},
+  {name:"Richard Pryor",cat:"film",emoji:"\ud83c\udfac",year:1987,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Stir Crazy, Silver Streak comedian-actor"},
+  {name:"Rick James",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Super Freak, Give It to Me Baby"},
+  {name:"Ricky Martin",cat:"music",emoji:"\ud83c\udfb5",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Livin' La Vida Loca, Latin pop superstar"},
+  {name:"Rihanna",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Umbrella, We Found Love, Diamonds"},
+  {name:"Ringling Brothers",cat:"live",emoji:"\ud83c\udfaa",year:1960,address:"6427 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Greatest Show on Earth circus founders"},
+  {name:"Rita Hayworth",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6301 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gilda, Cover Girl, 1940s pin-up icon"},
+  {name:"Robert De Niro",cat:"film",emoji:"\ud83c\udfac",year:2013,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Raging Bull, Taxi Driver, Goodfellas"},
+  {name:"Robert Duvall",cat:"film",emoji:"\ud83c\udfac",year:2004,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Godfather, Apocalypse Now, Tender Mercies"},
+  {name:"Robert Mitchum",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6366 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Cape Fear, Night of the Hunter, The Story of GI Joe"},
+  {name:"Robert Redford",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Butch Cassidy, The Sting, All the President's Men"},
+  {name:"Robin Williams",cat:"film",emoji:"\ud83c\udfac",year:1990,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Mrs. Doubtfire, Good Will Hunting, Aladdin's Genie"},
+  {name:"Rock Hudson",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6638 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Giant, Pillow Talk, All That Heaven Allows"},
+  {name:"Rod Steiger",cat:"film",emoji:"\ud83c\udfac",year:1976,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"In the Heat of the Night, The Pawnbroker"},
+  {name:"Rod Stewart",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6932 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Do Ya Think I'm Sexy, Maggie May, Sailing"},
+  {name:"Roger Moore",cat:"film",emoji:"\ud83c\udfac",year:2007,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Longest-serving James Bond actor"},
+  {name:"Ron Howard",cat:"film",emoji:"\ud83c\udfac",year:2013,address:"6243 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Happy Days, A Beautiful Mind, Apollo 13 director"},
+  {name:"Rosemary Clooney",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6274 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"White Christmas, Come On-a My House"},
+  {name:"Rosie O'Donnell",cat:"tv",emoji:"\ud83d\udcfa",year:2003,address:"6834 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Rosie O'Donnell Show, The View"},
+  {name:"Roy Orbison",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Oh, Pretty Woman, Crying, Traveling Wilburys"},
+  {name:"Rue McClanahan",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Golden Girls' Blanche Devereaux"},
+  {name:"Run-DMC",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Walk This Way, It's Like That, rap pioneers"},
+  {name:"Rush Limbaugh",cat:"radio",emoji:"\ud83d\udcfb",year:1993,address:"6269 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Rush Limbaugh Show, conservative radio host"},
+  {name:"Russell Crowe",cat:"film",emoji:"\ud83c\udfac",year:2010,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gladiator, A Beautiful Mind, L.A. Confidential"},
+  {name:"Ryan Gosling",cat:"film",emoji:"\ud83c\udfac",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"La La Land, Drive, The Notebook"},
+  {name:"Sally Field",cat:"tv",emoji:"\ud83d\udcfa",year:1995,address:"6833 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gidget, Flying Nun, two Oscar wins"},
+  {name:"Sam Cooke",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"You Send Me, A Change Is Gonna Come, soul pioneer"},
+  {name:"Sammy Davis Jr.",cat:"music",emoji:"\ud83c\udfb5",year:1960,address:"6254 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Candy Man, Mr. Bojangles, Rat Pack"},
+  {name:"Sandra Bullock",cat:"film",emoji:"\ud83c\udfac",year:2005,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Speed, Miss Congeniality, The Blind Side"},
+  {name:"Sean Connery",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Original James Bond 007"},
+  {name:"Selena",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Como La Flor, Bidi Bidi Bom Bom, Queen of Tejano"},
+  {name:"Shakira",cat:"music",emoji:"\ud83c\udfb5",year:2011,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Hips Don't Lie, Whenever Wherever, Waka Waka"},
+  {name:"Sharon Stone",cat:"film",emoji:"\ud83c\udfac",year:1995,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Basic Instinct, Casino, Total Recall"},
+  {name:"Shirley MacLaine",cat:"film",emoji:"\ud83c\udfac",year:1998,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Terms of Endearment, The Apartment, Sweet Charity"},
+  {name:"Siegfried and Roy",cat:"live",emoji:"\ud83c\udfaa",year:1999,address:"6627 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Las Vegas magic duo with white tigers"},
+  {name:"Sigourney Weaver",cat:"film",emoji:"\ud83c\udfac",year:1999,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Alien's Ellen Ripley, Avatar, Ghostbusters"},
+  {name:"Simon and Garfunkel",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Sound of Silence, Bridge Over Troubled Water"},
+  {name:"Sissy Spacek",cat:"film",emoji:"\ud83c\udfac",year:2011,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Carrie, Coal Miner's Daughter, In the Bedroom"},
+  {name:"Sly and the Family Stone",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Everyday People, Dance to the Music"},
+  {name:"Smokey Robinson",cat:"music",emoji:"\ud83c\udfb5",year:1983,address:"1627 Vine St",lat:34.1016,lng:-118.3370,note:"Tears of a Clown, Miracles frontman"},
+  {name:"Snoop Dogg",cat:"music",emoji:"\ud83c\udfb5",year:2018,address:"6920 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gin and Juice, Drop It Like It's Hot, Nuthin' But a G Thang"},
+  {name:"Sophia Loren",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6374 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Two Women Oscar winner, Italian cinema legend"},
+  {name:"Spencer Tracy",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6249 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Boys Town, Guess Who's Coming to Dinner, two Oscars"},
+  {name:"Spice Girls",cat:"music",emoji:"\ud83c\udfb5",year:1998,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Wannabe, 2 Become 1, girl power icons"},
+  {name:"Stanley Kubrick",cat:"film",emoji:"\ud83c\udfac",year:1984,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"2001: A Space Odyssey, The Shining, Full Metal Jacket"},
+  {name:"Steve Allen",cat:"tv",emoji:"\ud83d\udcfa",year:1960,address:"1611 Vine St",lat:34.1016,lng:-118.3370,note:"The Tonight Show creator and first host"},
+  {name:"Steve Harvey",cat:"tv",emoji:"\ud83d\udcfa",year:2013,address:"6270 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Family Feud host, stand-up comedian"},
+  {name:"Steve McQueen",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6834 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bullitt, The Great Escape, Papillon"},
+  {name:"Steven Spielberg",cat:"film",emoji:"\ud83c\udfac",year:1986,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Jaws, E.T., Schindler's List, Jurassic Park"},
+  {name:"Stevie Wonder",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"6627 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Superstition, Isn't She Lovely, Higher Ground"},
+  {name:"Sting",cat:"music",emoji:"\ud83c\udfb5",year:2000,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Every Breath You Take, Roxanne, The Police frontman"},
+  {name:"Susan Sarandon",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Thelma & Louise, Dead Man Walking, The Client"},
+  {name:"Suzanne Somers",cat:"tv",emoji:"\ud83d\udcfa",year:1988,address:"6201 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Three's Company's Chrissy Snow"},
+  {name:"Sylvester Stallone",cat:"film",emoji:"\ud83c\udfac",year:1984,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rocky, Rambo, The Expendables"},
+  {name:"TLC",cat:"music",emoji:"\ud83c\udfb5",year:2021,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Waterfalls, No Scrubs, Creep"},
+  {name:"Tammy Wynette",cat:"music",emoji:"\ud83c\udfb5",year:1976,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Stand by Your Man, First Lady of Country"},
+  {name:"Taylor Swift",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Love Story, Shake It Off, Anti-Hero"},
+  {name:"Ted Danson",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6712 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Cheers's Sam Malone, The Good Place"},
+  {name:"Telly Savalas",cat:"tv",emoji:"\ud83d\udcfa",year:1984,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Kojak, Who loves ya, baby?"},
+  {name:"The B-52s",cat:"music",emoji:"\ud83c\udfb5",year:2009,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Rock Lobster, Love Shack new wave group"},
+  {name:"The Beach Boys",cat:"music",emoji:"\ud83c\udfb5",year:1980,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Good Vibrations, Surfin' USA, California Girls"},
+  {name:"The Beatles",cat:"music",emoji:"\ud83c\udfb5",year:2012,address:"1750 N Vine St",lat:34.1016,lng:-118.3370,note:"Hey Jude, Let It Be, greatest rock band ever"},
+  {name:"The Bee Gees",cat:"music",emoji:"\ud83c\udfb5",year:1997,address:"6840 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Stayin' Alive, How Deep Is Your Love, disco kings"},
+  {name:"The Doors",cat:"music",emoji:"\ud83c\udfb5",year:1993,address:"1749 Vine St",lat:34.1016,lng:-118.3370,note:"Light My Fire, Riders on the Storm, Break On Through"},
+  {name:"The Drifters",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Under the Boardwalk, Up on the Roof, There Goes My Baby"},
+  {name:"The Everly Brothers",cat:"music",emoji:"\ud83c\udfb5",year:1986,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Dream, Bye Bye Love, All I Have to Do Is Dream"},
+  {name:"The Jackson 5",cat:"music",emoji:"\ud83c\udfb5",year:1980,address:"1507 Vine St",lat:34.1016,lng:-118.3370,note:"I Want You Back, ABC, I'll Be There"},
+  {name:"The Notorious B.I.G.",cat:"music",emoji:"\ud83c\udfb5",year:2022,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Juicy, Mo Money Mo Problems, Biggie Smalls"},
+  {name:"The Platters",cat:"music",emoji:"\ud83c\udfb5",year:1990,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Only You, The Great Pretender, Twilight Time"},
+  {name:"The Rolling Stones",cat:"music",emoji:"\ud83c\udfb5",year:1989,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Satisfaction, Paint It Black, Sympathy for the Devil"},
+  {name:"The Supremes",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Baby Love, You Can't Hurry Love, Stop! In the Name of Love"},
+  {name:"The Temptations",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"My Girl, Papa Was a Rollin' Stone, Motown icons"},
+  {name:"The Who",cat:"music",emoji:"\ud83c\udfb5",year:1999,address:"6927 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"My Generation, Baba O'Riley, Won't Get Fooled Again"},
+  {name:"Tim Conway",cat:"tv",emoji:"\ud83d\udcfa",year:1989,address:"6256 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Carol Burnett Show lovable funnyman"},
+  {name:"Tina Turner",cat:"music",emoji:"\ud83c\udfb5",year:1986,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"What's Love Got to Do with It, Simply the Best, Proud Mary"},
+  {name:"Tom Cruise",cat:"film",emoji:"\ud83c\udfac",year:1986,address:"6915 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Top Gun, Mission: Impossible, Jerry Maguire"},
+  {name:"Tom Hanks",cat:"film",emoji:"\ud83c\udfac",year:1992,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Forrest Gump, Cast Away, Saving Private Ryan"},
+  {name:"Tom Jones",cat:"music",emoji:"\ud83c\udfb5",year:1989,address:"6845 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"It's Not Unusual, Delilah, Sex Bomb"},
+  {name:"Tony Bennett",cat:"music",emoji:"\ud83c\udfb5",year:2007,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Left My Heart in San Francisco, jazz-pop legend"},
+  {name:"Tony Curtis",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6339 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Some Like It Hot, Spartacus, The Defiant Ones"},
+  {name:"Tony Randall",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Odd Couple's Felix Unger, The Tony Randall Show"},
+  {name:"Tupac Shakur",cat:"music",emoji:"\ud83c\udfb5",year:2023,address:"7080 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"California Love, Dear Mama, All Eyez on Me"},
+  {name:"Tyrone Power",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6638 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Mark of Zorro, Blood and Sand"},
+  {name:"Ursula Andress",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"First Bond Girl, Dr. No's Honey Ryder"},
+  {name:"Usher",cat:"music",emoji:"\ud83c\udfb5",year:2016,address:"7083 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Yeah!, Burn, Confessions R&B superstar"},
+  {name:"Vanna White",cat:"tv",emoji:"\ud83d\udcfa",year:1994,address:"6250 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Wheel of Fortune letter-turner icon"},
+  {name:"Veronica Lake",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6420 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Sullivan's Travels, This Gun for Hire"},
+  {name:"Vivien Leigh",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Gone with the Wind, A Streetcar Named Desire"},
+  {name:"Walter Matthau",cat:"film",emoji:"\ud83c\udfac",year:1976,address:"7000 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Odd Couple, The Bad News Bears"},
+  {name:"Warren Beatty",cat:"film",emoji:"\ud83c\udfac",year:1994,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Bonnie and Clyde, Bugsy, Shampoo"},
+  {name:"Whitney Houston",cat:"music",emoji:"\ud83c\udfb5",year:1998,address:"6901 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"I Will Always Love You, Greatest Love of All"},
+  {name:"Whoopi Goldberg",cat:"film",emoji:"\ud83c\udfac",year:1995,address:"6320 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The Color Purple, Ghost, Sister Act"},
+  {name:"Will Smith",cat:"film",emoji:"\ud83c\udfac",year:2013,address:"6801 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ali, The Pursuit of Happyness, Men in Black"},
+  {name:"William Holden",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6530 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Sunset Boulevard, Stalag 17, The Bridge on the River Kwai"},
+  {name:"William Shatner",cat:"tv",emoji:"\ud83d\udcfa",year:1983,address:"6301 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Star Trek's Captain James T. Kirk"},
+  {name:"William Wyler",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6834 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Ben-Hur, Mrs. Miniver, Roman Holiday director"},
+  {name:"Willie Nelson",cat:"music",emoji:"\ud83c\udfb5",year:1993,address:"1750 N Vine St",lat:34.1016,lng:-118.3370,note:"On the Road Again, Always on My Mind, country outlaw"},
+  {name:"Wilson Pickett",cat:"music",emoji:"\ud83c\udfb5",year:1994,address:"1750 Vine St",lat:34.1016,lng:-118.3370,note:"Mustang Sally, In the Midnight Hour, soul icon"},
+  {name:"Woody Allen",cat:"film",emoji:"\ud83c\udfac",year:1996,address:"6065 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Annie Hall, Manhattan, Midnight in Paris"},
+  {name:"Woody Guthrie",cat:"music",emoji:"\ud83c\udfb5",year:1988,address:"1731 Vine St",lat:34.1016,lng:-118.3370,note:"This Land Is Your Land, folk music legend"},
+  {name:"Yul Brynner",cat:"film",emoji:"\ud83c\udfac",year:1960,address:"6264 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"The King and I Oscar winner"},
+  {name:"Zero Mostel",cat:"theatre",emoji:"\ud83c\udfad",year:1960,address:"6264 Hollywood Blvd",lat:34.1016,lng:-118.3370,note:"Fiddler on the Roof's original Tevye"},
+];
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+function init() {
   document.getElementById('star-count-badge').textContent = `${STARS.length.toLocaleString()} Stars`;
+  document.getElementById('data-loading-bar').classList.add('hidden');
   renderFeatured();
   renderList();
 }
-
-function showBanner(text, type = 'loading') {
-  const bar = document.getElementById('data-loading-bar');
-  const textEl = document.getElementById('data-loading-text');
-  const spinner = bar.querySelector('.data-spinner');
-  bar.classList.remove('hidden');
-  textEl.textContent = text;
-  if (type === 'success') {
-    bar.style.background = '#EBF5F1';
-    bar.style.color = '#3B7A5A';
-    if (spinner) spinner.style.display = 'none';
-    setTimeout(() => bar.classList.add('hidden'), 3500);
-  } else if (type === 'error') {
-    bar.style.background = '#F8EBEB';
-    bar.style.color = '#8A3B3B';
-    if (spinner) spinner.style.display = 'none';
-    setTimeout(() => bar.classList.add('hidden'), 5000);
-  } else {
-    bar.style.background = '';
-    bar.style.color = '';
-    if (spinner) spinner.style.display = '';
-  }
-}
-
-async function init() {
-  // ── 1. Try localStorage cache ─────────────────────────────────────────────
-  try {
-    const raw = localStorage.getItem(CACHE_KEY);
-    if (raw) {
-      const { timestamp, stars } = JSON.parse(raw);
-      if (Date.now() - timestamp < CACHE_TTL_MS && Array.isArray(stars) && stars.length > 200) {
-        applyStars(stars);
-        document.getElementById('data-loading-bar').classList.add('hidden');
-
-        // Silent background refresh if older than 3 days
-        if (Date.now() - timestamp > 3 * 24 * 60 * 60 * 1000) {
-          fetchAllStars().then(stars => {
-            try { localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stars })); } catch(e) {}
-          }).catch(() => {});
-        }
-        return;
-      }
-    }
-  } catch(e) { /* storage unavailable */ }
-
-  // ── 2. First load — fetch from Wikidata ───────────────────────────────────
-  showBanner('Loading Walk of Fame stars from Wikidata…');
-
-  // Show empty state with spinner while loading
-  renderList();
-
-  try {
-    const stars = await fetchAllStars();
-
-    if (stars.length < 100) throw new Error('Too few results returned');
-
-    // Save to cache
-    try {
-      localStorage.setItem(CACHE_KEY, JSON.stringify({ timestamp: Date.now(), stars }));
-    } catch(e) { /* storage full */ }
-
-    applyStars(stars);
-    showBanner(`✓ ${stars.length.toLocaleString()} stars loaded`, 'success');
-
-  } catch(err) {
-    console.error('Wikidata load failed:', err);
-    showBanner('Could not load star data — check your connection and reload', 'error');
-    // Show empty state
-    document.getElementById('empty-state').classList.add('visible');
-    document.getElementById('empty-state').querySelector('.empty-title').textContent = 'Could not load stars';
-    document.getElementById('empty-state').querySelector('.empty-sub').textContent = 'Check your connection and refresh the page.';
-  }
-}
-
 init();
 </script>
 </body>
