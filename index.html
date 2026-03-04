@@ -1379,8 +1379,11 @@ document.getElementById('detail-panel').addEventListener('touchend', e => {
 }, { passive: true });
 
 // ─── WIKIDATA LOADER + CACHE + INIT ────────────────────────────────────────────
-const CACHE_KEY = 'wof_stars_v2';
+const CACHE_KEY = 'wof_stars_v3';
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+// Clear any old cache versions
+try { ['wof_stars_v1','wof_stars_v2'].forEach(k => localStorage.removeItem(k)); } catch(e) {}
 
 const catEmojis = { film:'🎬', tv:'📺', music:'🎵', radio:'📻', theatre:'🎭', live:'🎪' };
 
@@ -1412,30 +1415,32 @@ function parseWikidataRows(rows) {
     if (!name || seen.has(name) || /^Q\d+$/.test(name)) continue;
     seen.add(name);
 
-    // Category
-    const rawCat = (r.catLabel?.value || r.awardLabel?.value || '').toLowerCase().trim();
-    const cat = wikidataCatMap[rawCat] || 'film';
-
-    // Year
-    const year = r.year?.value ? parseInt(r.year.value) : null;
-
-    // Address — Wikidata gives street name + optional number
-    let address = 'Hollywood Blvd';
-    if (r.streetLabel?.value) {
-      const num = r.housenum?.value || '';
-      address = (num ? num + ' ' : '') + r.streetLabel.value;
+    // Category — try award label first, fall back to description keywords
+    const rawCat = (r.catLabel?.value || '').toLowerCase().trim();
+    let cat = wikidataCatMap[rawCat] || null;
+    if (!cat) {
+      // Try to infer from English description
+      const desc = (r.desc?.value || '').toLowerCase();
+      if (/\b(actor|actress|director|film|movie|cinema|screen)\b/.test(desc)) cat = 'film';
+      else if (/\b(singer|musician|band|rapper|recording|album|songwriter)\b/.test(desc)) cat = 'music';
+      else if (/\b(television|tv|host|presenter|talk show|sitcom)\b/.test(desc)) cat = 'tv';
+      else if (/\b(radio)\b/.test(desc)) cat = 'radio';
+      else if (/\b(theatre|theater|broadway|stage)\b/.test(desc)) cat = 'theatre';
+      else if (/\b(performer|comedian|magician|circus|stunt)\b/.test(desc)) cat = 'live';
+      else cat = 'film'; // default
     }
 
-    // Note: use occupation/description if available, else generic
+    const year = r.year?.value ? parseInt(r.year.value) : null;
     const desc = r.desc?.value || '';
-    const note = desc || `${catConfig[cat]?.label || 'Entertainment'} honoree`;
+    // Capitalise first letter of description for the note
+    const note = desc ? desc.charAt(0).toUpperCase() + desc.slice(1) : `${catConfig[cat]?.label || 'Entertainment'} honoree`;
 
     stars.push({
       name,
       cat,
       emoji: catEmojis[cat] || '⭐',
       year: year || '–',
-      address,
+      address: 'Hollywood Blvd', // Wikidata address data is sparse; directions use name-based search
       lat: 34.1016,
       lng: -118.3370,
       note,
@@ -1444,22 +1449,21 @@ function parseWikidataRows(rows) {
   return stars;
 }
 
-async function fetchAllStars() {
-  // Wikidata SPARQL — fetch all Walk of Fame honorees
-  // Q17985761 = Hollywood Walk of Fame star (the award object)
+// Fetch one page of results from Wikidata (limit/offset pagination)
+async function fetchPage(offset, limit = 500) {
+  // Simplified query — just person, label, year, category
+  // Q17985761 = Hollywood Walk of Fame star item
+  // Keeping it lean avoids query timeouts
   const sparql = `
-    SELECT DISTINCT ?person ?personLabel ?year ?streetLabel ?housenum ?catLabel ?desc WHERE {
-      ?person p:P166 ?stmt .
-      ?stmt ps:P166 ?award .
+    SELECT DISTINCT ?person ?personLabel ?year ?catLabel ?desc WHERE {
+      ?person wdt:P166 ?award .
       ?award wdt:P31 wd:Q17985761 .
       OPTIONAL {
+        ?person p:P166 ?stmt .
+        ?stmt ps:P166 ?award2 .
+        ?award2 wdt:P31 wd:Q17985761 .
         ?stmt pq:P585 ?date .
         BIND(YEAR(?date) AS ?year)
-      }
-      OPTIONAL {
-        ?stmt pq:P276 ?loc .
-        ?loc wdt:P669 ?street .
-        OPTIONAL { ?loc wdt:P670 ?housenum }
       }
       OPTIONAL { ?award wdt:P2888 ?catLabel }
       OPTIONAL {
@@ -1471,15 +1475,38 @@ async function fetchAllStars() {
       }
     }
     ORDER BY ?personLabel
+    LIMIT ${limit}
+    OFFSET ${offset}
   `;
-
   const url = 'https://query.wikidata.org/sparql?format=json&query=' + encodeURIComponent(sparql);
-  const res = await fetch(url, {
-    headers: { 'Accept': 'application/sparql-results+json' }
-  });
-  if (!res.ok) throw new Error('Wikidata fetch failed: ' + res.status);
+  const res = await fetch(url, { headers: { 'Accept': 'application/sparql-results+json' } });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
-  return parseWikidataRows(data.results?.bindings || []);
+  return data.results?.bindings || [];
+}
+
+async function fetchAllStars() {
+  const PAGE = 500;
+  let allRows = [];
+  let offset = 0;
+  let attempts = 0;
+  const MAX_PAGES = 8; // safety cap: 8 × 500 = 4,000 max
+
+  showBanner(`Fetching stars… (page 1)`);
+
+  while (attempts < MAX_PAGES) {
+    const rows = await fetchPage(offset, PAGE);
+    allRows = allRows.concat(rows);
+    attempts++;
+
+    showBanner(`Fetching stars… (${allRows.length} so far)`);
+
+    // If fewer than PAGE results came back, we've hit the end
+    if (rows.length < PAGE) break;
+    offset += PAGE;
+  }
+
+  return parseWikidataRows(allRows);
 }
 
 function applyStars(stars) {
